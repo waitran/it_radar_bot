@@ -1,0 +1,146 @@
+# Источники и правила отбора.
+# Категории, ключевые слова, стоп-слова и пороги — настраиваются здесь.
+
+telegram_channels:
+  - key: rostelecom_tech
+    username: rostelecom_tech
+  - key: rostelecom_molodezh
+    username: rostelecom_molodezh
+  - key: ctdlru
+    username: CTDLru
+  - key: mgtsstudents
+    username: mgtsstudents
+  - key: brainzbycroc
+    username: brainzbycroc
+  - key: k2cybersec_team
+    username: k2cybersec_team
+  - key: rvision_team
+    username: rvision_team
+
+websites:
+  # RSS/API у этих сайтов отсутствуют (проверено), поэтому для каждого — отдельный сборщик.
+  - key: k2_vacancy
+    name: "К2Кибербезопасность — вакансии"
+    url: "https://careers.cybersecurity.k2.tech/vacancy"
+    type: k2_vacancy        # app/collectors/k2.py: публичный JSON-эндпоинт каталога Tilda
+  - key: croc_vacancies
+    name: "КРОК — стажировки и вакансии (опыт 0-1 год)"
+    url: "https://careers.croc.ru/vacancies/?_sft_expirience=0-1-%D0%B3%D0%BE%D0%B4"
+    type: croc_vacancies    # app/collectors/croc.py: HTML-карточки .vacancy__card-item
+  - key: rtkit_careers
+    name: "Ростелеком ИТ (RTKiT) — карьера"
+    url: "https://rtkit.ru/careers"
+    type: rtkit_careers     # app/collectors/rtkit.py: SPA, данные извлечены из статического JS-бандла
+
+rules:
+  categories:
+    internships:
+      label: "Стажировки и программы для начинающих"
+      keywords:
+        - стажировк
+        - стажер
+        - стажёр
+        - практик
+        - internship
+        - trainee
+        - junior
+        - джуниор
+        - начинающ
+        - без опыта
+        - опыт не требуется
+        - начальный уровень
+        - entry-level
+        - graduate program
+        - программа развития
+        - школа программирования
+        - it-школа
+        - университет
+
+        - студенты
+        - студент
+    events:
+      label: "Мероприятия: митапы, конференции, лекции"
+      keywords:
+        - митап
+        - meetup
+        - конференц
+        - conference
+        - лекци
+        - семинар
+        - воркшоп
+        - workshop
+        - саммит
+        - форум
+        - вебинар
+        - webinar
+        - день открытых дверей
+        - нетворкинг
+        - встреча
+        - мастер-класс
+        - демо-день
+    contests:
+      label: "Хакатоны, соревнования, олимпиады, конкурсы"
+      keywords:
+        - хакатон
+        - hackathon
+        - соревнован
+        - конкурс
+        - contest
+        - олимпиад
+        - olympiad
+        - чемпионат
+        - первенство
+        - кейс-чемпионат
+        - game of
+        - киберспорт
+        - ctf
+        - capture the flag
+        - отборочн
+        - призов
+    career:
+      label: "Карьерные встречи и похожие возможности"
+      keywords:
+        - карьерн
+        - карьер
+        - ярмарк вакансий
+        - career fair
+        - job fair
+        - день карьеры
+        - профориентац
+        - тестовое задание
+        - собеседован
+        - трудоустройств
+        - работа для студентов
+        - подработка
+        - part-time
+        - частичная занятость
+
+  # Публикации с этими словами отбрасываются (новости компаний, реклама продуктов)
+  exclude_keywords:
+    - скидка
+    - акция
+    - распродаж
+    - купон
+    - промокод
+    - новый продукт
+    - релиз продукта
+    - обновление линейки
+    - партнерская программ
+    - купить
+    - заказать
+    - поздравля
+    - юбилей компании
+    - итоги года компании
+    - пресс-рел
+    - награжден
+    - получена премия
+    - сертификат соответствия
+    - лицензи
+
+  min_score: 1          # минимум совпадений ключевых слов для попадания в выборку
+  max_age_days: 60      # не присылать публикации старше этого возраста
+  closed_words:         # признаки того, что набор закрыт / срок истёк
+    - заверш
+    - подвели итоги
+    - состоялся
+    - отключен
