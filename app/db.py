@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS runs (
     items_notified INTEGER,
     errors         TEXT
 );
+
+CREATE TABLE IF NOT EXISTS flags (
+    name  TEXT PRIMARY KEY,
+    value TEXT
+);
 """
 
 
@@ -134,6 +139,23 @@ class Database:
                 "SELECT last_error FROM source_state WHERE source_key=?", (source_key,)
             ).fetchone()
             return row["last_error"] if row else None
+
+    def source_states(self) -> list[sqlite3.Row]:
+        with self._lock:
+            return self._conn.execute("SELECT * FROM source_state ORDER BY source_key").fetchall()
+
+    def get_flag(self, name: str, default: str | None = None) -> str | None:
+        with self._lock:
+            row = self._conn.execute("SELECT value FROM flags WHERE name=?", (name,)).fetchone()
+            return row["value"] if row else default
+
+    def set_flag(self, name: str, value: str) -> None:
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO flags(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value",
+                (name, value),
+            )
+            self._conn.commit()
 
     def log_run(self, started_at: str, finished_at: str, found: int, new: int, notified: int, errors: str | None) -> None:
         with self._lock:

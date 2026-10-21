@@ -85,7 +85,7 @@ def fetch_channel(username: str) -> list[Item]:
         permalink = f"https://t.me/{username}/{post_id}"
         items.append(Item(
             source_key=f"tg_{username.lower()}",
-            source_name=f"Telegram: {username}",
+            source_name=f"Telegram-канал t.me/{username}",
             external_id=post_id,
             url=permalink,
             title=html_mod.unescape(first_line)[:200],

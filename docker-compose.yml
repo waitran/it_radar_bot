@@ -1,0 +1,15 @@
+services:
+  it-radar-bot:
+    build: .
+    container_name: it-radar-bot
+    restart: unless-stopped
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Задайте TELEGRAM_BOT_TOKEN в .env или окружении}
+      OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:?Задайте OWNER_TELEGRAM_ID (числовой chat_id владельца)}
+      DB_PATH: /data/bot.db
+      POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-3600}
+    volumes:
+      - bot-data:/data
+
+volumes:
+  bot-data:

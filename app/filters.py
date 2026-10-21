@@ -51,7 +51,6 @@ def parse_deadline(text: str, published_at: datetime | None) -> datetime | None:
     if not m:
         return None
     token = m.group(1).strip()
-    year_hint = published_at.year if published_at else datetime.now(timezone.utc).year
     day = month = year = None
     dm = DATE_RU.match(token)
     if dm:
@@ -60,7 +59,7 @@ def parse_deadline(text: str, published_at: datetime | None) -> datetime | None:
         if y:
             year = int(y) if len(y) > 2 else 2000 + int(y)
     else:
-        pm = re.match(r"(\d{1,2})\s+([а-za]+)", token)
+        pm = re.match(r"(\d{1,2})\s+([a-zа-я]+)", token)
         if pm:
             day = int(pm.group(1))
             mon_root = pm.group(2)
