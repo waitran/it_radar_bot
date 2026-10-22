@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import yaml
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 class ConfigurationError(ValueError):
@@ -46,7 +47,9 @@ class Rules:
     exclude_keywords: list[str] = field(default_factory=list)
     min_score: int = 1
     max_age_days: int = 60
-    closed_words: list[str] = field(default_factory=lambda: ["заверши", "подвели итоги", "отключена"])
+    closed_words: list[str] = field(default_factory=list)
+    timezone: str = "Europe/Moscow"
+    require_it_context: bool = True
 
 
 def _norm(s: str) -> str:
@@ -110,8 +113,30 @@ class Config:
             if any(type(value) is not int or value < 1 for value in (website.max_pages, website.max_details)):
                 raise ConfigurationError("max_pages и max_details сайта должны быть положительными целыми числами.")
         rules_raw = raw.get("rules", {})
+        if not isinstance(rules_raw, dict):
+            raise ConfigurationError("rules должен быть словарём.")
+        try:
+            ZoneInfo(rules_raw.get("timezone", "Europe/Moscow"))
+        except (ZoneInfoNotFoundError, ValueError, TypeError):
+            raise ConfigurationError("Некорректный rules.timezone.") from None
+        if type(rules_raw.get("require_it_context", True)) is not bool:
+            raise ConfigurationError("rules.require_it_context должен быть boolean.")
+        for field_name in ("exclude_keywords", "closed_words"):
+            values = rules_raw.get(field_name, [])
+            if not isinstance(values, list) or not all(isinstance(x, str) and x.strip() for x in values):
+                raise ConfigurationError(f"rules.{field_name} должен быть списком непустых строк.")
+        for field_name, default, minimum in (("min_score", 1, 1), ("max_age_days", 60, 0)):
+            value = rules_raw.get(field_name, default)
+            if type(value) is not int or value < minimum:
+                raise ConfigurationError(f"Некорректный rules.{field_name}.")
         categories = {}
+        if not isinstance(rules_raw.get("categories", {}), dict):
+            raise ConfigurationError("rules.categories должен быть словарём.")
         for cat_key, cat in (rules_raw.get("categories") or {}).items():
+            if cat_key not in {"internships", "events", "contests", "career"} or not isinstance(cat, dict):
+                raise ConfigurationError("Неизвестная категория или неверная структура rules.categories.")
+            if not isinstance(cat.get("keywords", []), list) or not all(isinstance(x, str) and x.strip() for x in cat.get("keywords", [])):
+                raise ConfigurationError("Ключевые слова категории должны быть списком непустых строк.")
             categories[_norm(cat_key)] = {
                 "label": cat.get("label", cat_key),
                 "keywords": [_norm(k) for k in cat.get("keywords", [])],
@@ -121,7 +146,9 @@ class Config:
             exclude_keywords=[_norm(k) for k in rules_raw.get("exclude_keywords", [])],
             min_score=int(rules_raw.get("min_score", 1)),
             max_age_days=int(rules_raw.get("max_age_days", 60)),
-            closed_words=[_norm(w) for w in rules_raw.get("closed_words", ["заверши", "подвели итоги", "отключена"])],
+            closed_words=[_norm(w) for w in rules_raw.get("closed_words", [])],
+            timezone=rules_raw.get("timezone", "Europe/Moscow"),
+            require_it_context=rules_raw.get("require_it_context", True),
         )
         return Config(
             bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),

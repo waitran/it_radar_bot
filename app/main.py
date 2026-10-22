@@ -14,6 +14,7 @@ import signal
 import threading
 import time
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from app.collectors import croc, k2, rtkit, telegram_channel
 from app.config import Config, ConfigurationError
@@ -114,7 +115,9 @@ class Bot:
             status = "статус регистрации неизвестен — проверьте на странице"
         lines.append(f"Статус: {e(status)}")
         if item.deadline:
-            lines.append(f"Срок: {item.deadline.date().isoformat()}")
+            tz = ZoneInfo(self.cfg.rules.timezone)
+            deadline = item.deadline.astimezone(tz) if item.deadline.tzinfo else item.deadline.replace(tzinfo=tz)
+            lines.append(f"Срок: {deadline:%Y-%m-%d %H:%M} ({e(self.cfg.rules.timezone)})")
         lines.append(f'Оригинал: <a href="{item.url}">{e(item.url)}</a>')
         if item.apply_url:
             lines.append(f'Заявка/регистрация: <a href="{item.apply_url}">{e(item.apply_url)}</a>')

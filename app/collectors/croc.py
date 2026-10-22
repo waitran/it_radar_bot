@@ -96,5 +96,6 @@ class CrocCollector:
                 url=url, title=text(title), summary=content[:500], raw_text=content,
                 apply_url=url + '#responseForm' if soup.select_one('#responseForm form') else None,
                 published_at=published, deadline=deadline, registration_status='unknown',
+                kind='vacancy', experience=text(tags) if tags else '',
             ))
         return items

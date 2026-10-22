@@ -28,6 +28,9 @@ class Item:
     deadline: datetime | None = None
     raw_text: str = ""
     categories: list[str] = field(default_factory=list)  # заполняется фильтрами
+    kind: str = "publication"  # vacancy is set by verified website collectors
+    experience: str = ""
+    explicitly_closed: bool = False
 
     @property
     def item_key(self) -> str:

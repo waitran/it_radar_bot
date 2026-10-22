@@ -87,5 +87,6 @@ class K2Collector:
                 external_id=path.rsplit('/', 1)[-1], url=url, title=text(product['title']),
                 summary=full_text[:500], raw_text=full_text, apply_url=apply_url,
                 published_at=published, deadline=deadline, registration_status='unknown',
+                kind='vacancy',
             ))
         return items

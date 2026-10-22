@@ -1,102 +1,91 @@
-"""Правила отбора: категории, стоп-слова, признаки закрытого набора/истёкшего срока."""
+"""Deterministic selection of actionable entry-level IT opportunities."""
 from __future__ import annotations
 
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from app.config import Rules
+from app.date_rules import date_evidence, _aware
 from app.models import Item
 
 log = logging.getLogger("filters")
 
-# Признаки явной открытости регистрации/набора (только при наличии этих фраз
-# мы можем сказать владельцу, что набор открыт).
-OPEN_MARKERS = [
-    "открыт набор", "набор открыт", "идёт набор", "идет набор", "приём заявок",
-    "принимаем заявки", "заявки принимаются", "регистрация открыта", "открытая регистрация",
-    "заявки до", "подача заявок", "регистрация открыта", "открыта регистрация", "приём заявок", "дедлайн", "deadline", "успей", "успейте", "подача заявок", "остались места",
-    "есть места", "register now", "apply now", "open for applications", "стартует",
-    "старт приема", "ждём вас", "ждем вас", "присоединяйся", "присоединяйтесь",
-    "хочешь участвовать", "хотите участвовать", "открываем набор", "запускаем набор",
-]
-
-# Признаки того, что событие/набор уже завершён.
-CLOSED_PATTERNS = [
-    r"подвед(?:ены|ли)\s+итог", r"заверши[лсяь]?[ао]?\b", r"состоял[сяась]",
-    r"прошедш", r"прош[ею][лло]\s", r"итоги\s+(?:конкурса|хакатона|мероприятия|соревнования)",
-    r"набор\s+закрыт", r"приём\s+заявок\s+закры", r"регистрация\s+закры",
-    r"мероприятие\s+отмен", r"вакансия\s+отключена", r"\barchived\b", r"\bclosed\b",
-]
-
-DATE_RU = re.compile(r"\b(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?\b")
-MONTHS_RU = {
-    "январ": 1, "феврал": 2, "март": 3, "апрел": 4, "ма": 5, "июн": 6,
-    "июл": 7, "август": 8, "сентябр": 9, "октябр": 10, "November": 11,
-    "ноябр": 11, "декабр": 12,
-}
-
-
-def _norm(s: str) -> str:
-    s = s.lower().replace("ё", "е")
-    return re.sub(r"\s+", " ", s)
-
-
-def parse_deadline(text: str, published_at: datetime | None) -> datetime | None:
-    """Пытаемся извлечь дедлайн подачи («до 15 ноября», «до 30.11.2026»)."""
-    t = _norm(text or "")
-    m = re.search(r"(?:до|deadlin(?:e)?|последн(?:ий|яя)\s+(?:дата\s+)?)(?:\s|\u00a0)*(\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?|(?:\d{1,2}\s+(?:январ|феврал|март|апрел|мая|ма|июн|июл|август|сентябр|октябр|ноябр|декабр)[а-я]*))", t)
-    if not m:
-        m = re.search(r"до\s+(\d{1,2}\s+[а-я]+)", t)
-    if not m:
-        return None
-    token = m.group(1).strip()
-    day = month = year = None
-    dm = DATE_RU.match(token)
-    if dm:
-        day, month = int(dm.group(1)), int(dm.group(2))
-        y = dm.group(3)
-        if y:
-            year = int(y) if len(y) > 2 else 2000 + int(y)
-    else:
-        pm = re.match(r"(\d{1,2})\s+([a-zа-я]+)", token)
-        if pm:
-            day = int(pm.group(1))
-            mon_root = pm.group(2)
-            for root, num in MONTHS_RU.items():
-                if mon_root.startswith(root[:3]):
-                    month = num
-                    break
-    if not day or not month:
-        return None
-    if year is None:
-        base = published_at or datetime.now(timezone.utc)
-        year = base.year
-        try:
-            cand = datetime(year, month, day, tzinfo=timezone.utc)
-        except ValueError:
-            return None
-        if cand < base:  # дедлайн в следующем году
-            year += 1
-    try:
-        return datetime(year, month, day, 23, 59, tzinfo=timezone.utc)
-    except ValueError:
-        return None
+_IT = re.compile(
+    r"\b(?:python|java|postgresql)(?=\d)|\b(?:it|ict|ит|ai|ml|llm|devops|sre|soc|ctf|qa|sql|python|java|javascript|"
+    r"typescript|golang|go|rust|frontend|backend|fullstack|android|ios|linux|data|cyber|"
+    r"cloud|software|developer|programming|tech|тех|ib|иб)\b|"
+    r"информационн\w* (?:технолог|безопасност|систем)|программирован|"
+    r"разработ(?:к|чик)|кибер|цифров|машинн\w* обучен|нейросет|нейронн|"
+    r"искусственн\w* интеллект|тестирован|сетев\w* инженер|системн\w* (?:аналит|админист)|"
+    r"бизнес[ -]аналит|робототех|компьютер|\b(?:ии|цод|presale|siem)\b",
+    re.I,
+)
+_BEGINNER = re.compile(r"стажиров|стаж[её]р|\b(?:intern|internship|trainee|junior|entry[ -]level)\b|младш|начинающ|без опыта|нет опыта|опыт не требуется|\b0\s*[-–—]\s*1\b|(?:приглашаем|ждем)\s+(?:студент|выпускник)|опыт\w*.{0,20}(?:до\s*1\s*(?:года|лет)|0\s*[-–—]\s*1)", re.I)
+_SENIOR = re.compile(r"\b(?:senior|middle|lead|principal|head of)\b|ведущ\w*|руководител\w*|старш\w*", re.I)
+_RESTRICTED_AUDIENCE = re.compile(r"(?:только|исключительно)\s+для\s+(?:опытных\s+)?(?:руководител|директор|senior|middle|lead|ciso|cto)|не\s+(?:предназначен\w*|подходит)\s+для\s+(?:начинающ|студент)", re.I)
+_INVITATION = re.compile(
+    r"приглаша|присоедин|участвуй|прими участие|принять участие|приходи|запис(?:аться|ывай|ь)|"
+    r"зарегистр|регистриру|регистрация|при[её]м заявок|подать (?:заявку|резюме)|"
+    r"пода(?:й|вай|ча) заяв|отклик|набор|жд[её]м|состоится|пройд[её]т|"
+    r"стартует|начн[её]тся|успей|\b(?:register|registration|apply|join us|applications open)\b",
+    re.I,
+)
+_RETROSPECTIVE = re.compile(
+    r"(?:митап|хакатон|конференци\w*|встреч\w*|вебинар|соревнован\w*|лекци\w*)[^.!?\n]{0,65}?(?:уже\s+)?(?:прош[её]л|прошла|прошли|состоял|заверш)|"
+    r"(?:прош[её]л|прошла|прошли|состоял\w*|завершил\w*)\s+(?:наш\w*\s+)?(?:митап|хакатон|конференц|встреч|вебинар|лекц)|"
+    r"мы посетили|мы побывали|вспоминаем|вспоминатель|подводим итоги|итоги (?:хакатона|конкурса|митапа|конференции|олимпиады)|"
+    r"как (?:прош[её]л|прошла|прошли)|(?:смотр|посмотр)\w* запись|запись (?:вебинара|лекции|митапа|конференции)|"
+    r"\b(?:event recap|watch the recording|took place|was held)\b",
+    re.I,
+)
+_CLOSED = re.compile(
+    r"(?:регистрация|набор|при[её]м заявок|подача заявок|конкурс|хакатон|митап|мероприятие|конференция|вебинар|лекция|вакансия)\s*(?:уже\s+)?(?:закрыт\w*|заверш[её]н\w*|окончен\w*|приостановлен\w*)|"
+    r"(?:закрыт\w*|заверш[её]н\w*|окончен\w*)\s+(?:регистрация|набор|при[её]м заявок)|"
+    r"(?:заявки|отклики)\s+(?:больше\s+)?не принимаются|(?:все\s+)?места\s+(?:уже\s+)?(?:заняты|закончились)|"
+    r"\b(?:registration|applications?|vacancy)\s+(?:is\s+|are\s+)?(?:closed|ended)|\bsold out\b",
+    re.I,
+)
+_OPEN = re.compile(r"регистрация\s+(?:уже\s+)?открыта|открыт\w*\s+(?:регистрация|набор|при[её]м заявок)|при[её]м заявок\s+открыт|\bregistration\s+(?:is\s+)?open\b", re.I)
+_PROMOTION = re.compile(r"розыгрыш|разыгрываем|промокод|скидк\w*\s+\d|купи(?:те)?\s|\bbuy now\b", re.I)
 
 
-def detect_status(text: str, deadline: datetime | None, rules: Rules) -> str:
-    """open | closed | unknown. Unknown никогда не трактуем как открытый."""
-    t = _norm(text or "")
-    for pat in CLOSED_PATTERNS:
-        if re.search(pat, t):
-            return "closed"
-    for w in rules.closed_words:
-        if w and w in t:
-            return "closed"
-    if deadline is not None and deadline < datetime.now(timezone.utc):
+_NOT_OPEN = re.compile(r"(?:регистрац\w*|набор|прием заявок)[^.!?;\n]{0,45}(?:пока\s+|еще\s+)?не\s+(?:открыт|начат|начал)|регистрация\s+не\s+будет", re.I)
+_NONTECH_ROLE = re.compile(r"подбор\w* персонала|отдел кадров|документооборот|товарооборот|мерч|\bbdm\b|продаж|продвижени|\bhr\b|бухгалтер|рекрутер", re.I)
+_EVENT_TITLE = re.compile(r"митап|конференц|лекци|вебинар|встреч|воркшоп|конкурс|хакатон|олимпиад|\bctf\b", re.I)
+_EXPERIENCE = re.compile(r"\bопыт(?:а)?\b(?:\s+работы)?[^.!?;\n]{0,35}?(?:от\s+|не менее\s+|минимум\s+)?(\d+)\s*(?:[-–—]\s*\d+\s*)?(?:лет|год|года)\b", re.I)
+
+
+def _norm(value: str) -> str:
+    return re.sub(r"[ \t\u00a0]+", " ", (value or "").lower().replace("ё", "е"))
+
+
+def _keyword(keyword: str, text: str) -> bool:
+    # Prefixes still support Russian inflection, but never match inside a word:
+    # "акция" cannot exclude "транзакция" and "it" cannot match "security".
+    pattern = r"(?<!\w)" + re.escape(_norm(keyword).strip())
+    if re.fullmatch(r"[a-z]+", keyword, re.I):
+        pattern += r"(?!\w)"
+    return bool(keyword and re.search(pattern, text, re.I))
+
+
+def parse_deadline(text: str, published_at: datetime | None, *, now=None, timezone_name="Europe/Moscow") -> datetime | None:
+    now = _aware(now or datetime.now(timezone.utc), ZoneInfo(timezone_name))
+    stub = Item("", "", "", "", "", "", None, published_at)
+    deadlines, _ = date_evidence(stub, _norm(text), now, ZoneInfo(timezone_name))
+    return deadlines[0] if len(deadlines) == 1 else None
+
+
+def detect_status(text: str, deadline: datetime | None, rules: Rules, *, now=None) -> str:
+    tz = ZoneInfo(rules.timezone)
+    now = _aware(now or datetime.now(timezone.utc), tz)
+    text = _norm(text)
+    if _CLOSED.search(text) or any(_keyword(word, text) for word in rules.closed_words):
         return "closed"
-    has_open = any(k in t for k in OPEN_MARKERS)
-    if has_open and (deadline is None or deadline >= datetime.now(timezone.utc)):
+    if deadline is not None and _aware(deadline, tz) < now:
+        return "closed"
+    if not _NOT_OPEN.search(text) and _OPEN.search(text) and deadline is not None:
         return "open"
     return "unknown"
 
@@ -106,49 +95,78 @@ class Filters:
         self.rules = rules
 
     def match_categories(self, text: str) -> tuple[list[str], int]:
-        """Возвращает (категории, score) по нормализованному тексту."""
-        t = _norm(text)
-        cats: list[str] = []
-        score = 0
-        for key, cat in self.rules.categories.items():
-            hits = sum(1 for kw in cat["keywords"] if kw and kw in t)
+        text = _norm(text)
+        categories, score = [], 0
+        for key, category in self.rules.categories.items():
+            hits = sum(_keyword(word, text) for word in dict.fromkeys(category["keywords"]))
             if hits:
-                cats.append(key)
+                categories.append(key)
                 score += hits
-        return cats, score
+        return categories, score
 
     def is_excluded(self, text: str) -> str | None:
-        t = _norm(text)
-        for kw in self.rules.exclude_keywords:
-            if kw and kw in t:
-                return kw
-        return None
+        text = _norm(text)
+        return next((word for word in self.rules.exclude_keywords if _keyword(word, text)), None)
 
-    def check(self, item: Item) -> tuple[bool, str]:
-        """Основная проверка правил. Возвращает (подходит?, причина отказа)."""
-        full_text = f"{item.title}\n{item.summary or ''}\n{item.raw_text or ''}"
-
-        # возраст публикации
-        if item.published_at is not None:
-            age_days = (datetime.now(timezone.utc) - item.published_at).days
-            if age_days > self.rules.max_age_days:
-                return False, f"старше {self.rules.max_age_days} дней"
-
-        # явно закрытое объявление / истёкший срок
-        item.deadline = item.deadline or parse_deadline(full_text, item.published_at)
-        item.registration_status = detect_status(full_text, item.deadline, self.rules)
-        if item.registration_status == "closed":
+    def check(self, item: Item, *, now=None) -> tuple[bool, str]:
+        tz = ZoneInfo(self.rules.timezone)
+        now = _aware(now or datetime.now(timezone.utc), tz)
+        # Do not duplicate/truncate evidence by combining the summary and full text.
+        text = _norm(item.title + "\n" + (item.raw_text or item.summary or ""))
+        item.categories = []
+        deadlines, events = date_evidence(item, text, now, tz)
+        if item.deadline is not None:
+            deadlines = [_aware(item.deadline, tz)]
+        item.deadline = deadlines[0] if len(deadlines) == 1 else None
+        item.registration_status = detect_status(text, item.deadline, self.rules, now=now)
+        if item.explicitly_closed or item.registration_status == "closed":
+            item.registration_status = "closed"
             return False, "объявление закрыто или срок подачи истёк"
-        if item.is_expired():
-            return False, "срок подачи заявок истёк"
-
-        excl = self.is_excluded(full_text)
-        if excl:
-            return False, f"стоп-слово «{excl}» (новости/реклама)"
-
-        cats, score = self.match_categories(full_text)
-        if score < self.rules.min_score or not cats:
-            return False, "не подходит ни под одну категорию отбора"
-        item.categories = cats
-        log.debug("matched %s categories=%s score=%d", item.item_key, cats, score)
+        if deadlines and all(value < now for value in deadlines):
+            item.registration_status = "closed"
+            return False, "все распознанные сроки подачи истекли"
+        if events and all(value < now for value in events):
+            return False, "дата мероприятия уже прошла"
+        if _NOT_OPEN.search(text):
+            return False, "регистрация или набор ещё не открыты"
+        if item.published_at is not None and now - _aware(item.published_at, tz) > timedelta(days=self.rules.max_age_days):
+            return False, f"старше {self.rules.max_age_days} дней"
+        excluded = self.is_excluded(text)
+        if excluded:
+            return False, f"стоп-слово «{excluded}» (новости/реклама)"
+        categories, score = self.match_categories(text)
+        vacancy = item.kind == "vacancy" or (not _EVENT_TITLE.search(item.title) and bool(
+            re.search(r"\bваканс\w*", item.title) or re.search(r"\bищем\b|\bтребуется\b|открыта позиция|дайджест[_ ]ваканс", text) or _SENIOR.search(item.title)))
+        beginner = bool(_BEGINNER.search(text + " " + item.experience)
+                        or re.search(r"студент|выпускник", item.title + " " + item.experience, re.I))
+        if vacancy:
+            minimum = re.search(r"(?:от\s*)?(\d+)\s*(?:[-–—]\s*\d+\s*)?(?:лет|год|года|years?)", item.experience)
+            required = _EXPERIENCE.search(text)
+            experienced = bool(
+                (minimum and int(minimum[1]) >= 2)
+                or (required and int(required[1]) >= 2
+                    and not re.search(r"опыт[^.!?;\n]{0,20}до\s+", required[0]))
+            )
+            if not beginner or experienced or _SENIOR.search(item.title + " " + item.experience):
+                return False, "вакансия не начального уровня"
+            if self.rules.require_it_context and _NONTECH_ROLE.search(item.title):
+                return False, "вакансия не по IT-специальности"
+            # Benefit paragraphs mentioning conferences do not make a job an event.
+            categories = ["internships"] if "internships" in self.rules.categories else []
+            score = max(score, 1)
+        if not categories or score < self.rules.min_score:
+            return False, "не подходит ни под одну включённую категорию"
+        if _RESTRICTED_AUDIENCE.search(text):
+            return False, "участие ограничено опытными специалистами"
+        context = re.sub(r"\b(?:ит|it)[ -]*(?:компани\w*|индустри\w*|отрасл\w*|company)", "", text)
+        if self.rules.require_it_context and not _IT.search(context):
+            return False, "нет явного IT-контекста"
+        future = any(value >= now for value in deadlines + events)
+        if _RETROSPECTIVE.search(text) and not future:
+            return False, "отчёт о прошедшем событии или запись"
+        if _PROMOTION.search(text):
+            return False, "рекламный розыгрыш или предложение покупки"
+        if not (_INVITATION.search(text) or future or vacancy and beginner):
+            return False, "нет приглашения, заявки или предстоящего события"
+        item.categories = categories
         return True, ""

@@ -61,7 +61,7 @@ def test_deadline_in_past_excluded():
 def test_unknown_status_not_claimed_open():
     cfg = Config.load()
     f = Filters(cfg.rules)
-    it = _item("Лекция по машинному обучению в университете", "преподаватель расскажет про нейросети")
+    it = _item("Приглашаем на лекцию по машинному обучению", "преподаватель расскажет про нейросети")
     ok, _ = f.check(it)
     assert ok
     assert it.registration_status != "open", "нельзя утверждать, что регистрация открыта, без явных признаков"
@@ -86,7 +86,7 @@ def test_dedup_and_baseline(tmp_path: str | None = None):
                 key="h2", published=datetime(2000, 1, 1, tzinfo=timezone.utc))  # тот же заголовок из др. источника
     it2.source_key = "other"
     assert bot.process_item(it2, baseline=False) is False    # кросс-дедуп по title_hash
-    it3 = _item("Карьерная встреча для студентов: день открытых дверей", key="c1")
+    it3 = _item("Приглашаем на карьерную встречу для студентов IT: день открытых дверей", key="c1")
     assert bot.process_item(it3, baseline=False) is True     # новое подходящее — в отправку
     assert len(db.pending_unnotified()) == 1
     os.remove(db_file)
