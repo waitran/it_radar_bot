@@ -9,6 +9,10 @@ from typing import Any
 import yaml
 
 
+class ConfigurationError(ValueError):
+    """A configuration error whose message contains names, never input values."""
+
+
 @dataclass
 class TelegramChannelSource:
     key: str
@@ -49,7 +53,7 @@ def _norm(s: str) -> str:
 
 @dataclass
 class Config:
-    bot_token: str
+    bot_token: str = field(repr=False)
     owner_id: int
     db_path: str
     poll_interval_seconds: int
@@ -59,6 +63,25 @@ class Config:
     websites: list[HttpSource]
     rules: Rules
     first_run_lookback_hours: int = 72
+
+    def validate_runtime(self) -> None:
+        """Validate startup credentials without contacting Telegram or echoing values."""
+        if not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", self.bot_token):
+            raise ConfigurationError("Задайте корректный TELEGRAM_BOT_TOKEN в окружении.")
+        if self.owner_id <= 0:
+            raise ConfigurationError("OWNER_TELEGRAM_ID должен быть положительным числовым ID владельца.")
+        if not self.db_path.strip():
+            raise ConfigurationError("DB_PATH не должен быть пустым.")
+
+    @staticmethod
+    def _env_int(name: str, default: str, *, minimum: int = 1) -> int:
+        try:
+            value = int(os.environ.get(name, default))
+        except ValueError:
+            raise ConfigurationError(f"{name} должен быть целым числом.") from None
+        if value < minimum:
+            raise ConfigurationError(f"{name} должен быть не меньше {minimum}.")
+        return value
 
     @staticmethod
     def load(path: str | None = None) -> "Config":
@@ -89,11 +112,11 @@ class Config:
             closed_words=[_norm(w) for w in rules_raw.get("closed_words", ["заверши", "подвели итоги", "отключена"])],
         )
         return Config(
-            bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
-            owner_id=int(os.environ.get("OWNER_TELEGRAM_ID", "0")),
+            bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+            owner_id=Config._env_int("OWNER_TELEGRAM_ID", "0", minimum=0),
             db_path=os.environ.get("DB_PATH", "/data/bot.db"),
-            poll_interval_seconds=int(os.environ.get("POLL_INTERVAL_SECONDS", "3600")),
-            request_timeout_seconds=int(os.environ.get("REQUEST_TIMEOUT_SECONDS", "30")),
+            poll_interval_seconds=Config._env_int("POLL_INTERVAL_SECONDS", "3600"),
+            request_timeout_seconds=Config._env_int("REQUEST_TIMEOUT_SECONDS", "30"),
             user_agent=os.environ.get(
                 "USER_AGENT",
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
@@ -101,5 +124,5 @@ class Config:
             channels=channels,
             websites=websites,
             rules=rules,
-            first_run_lookback_hours=int(os.environ.get("FIRST_RUN_LOOKBACK_HOURS", "72")),
+            first_run_lookback_hours=Config._env_int("FIRST_RUN_LOOKBACK_HOURS", "72", minimum=0),
         )

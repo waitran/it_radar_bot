@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import html
 import logging
 import signal
@@ -15,11 +16,12 @@ import time
 from datetime import datetime, timezone
 
 from app.collectors import croc, k2, rtkit, telegram_channel
-from app.config import Config
+from app.config import Config, ConfigurationError
 from app.db import Database
 from app.filters import Filters
 from app.models import Item
 from app.notify import TelegramNotifier
+from app.logging_config import configure_logging
 
 log = logging.getLogger("main")
 
@@ -271,13 +273,23 @@ def poll_updates(bot: Bot, stop: threading.Event) -> None:
 
 
 def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    cfg = Config.load()
-    if not cfg.bot_token or not cfg.owner_id:
-        raise SystemExit("Задайте TELEGRAM_BOT_TOKEN и OWNER_TELEGRAM_ID (см. README).")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--check-config", action="store_true", help="Проверить настройки без сети и запуска бота")
+    args = parser.parse_args()
+    configure_logging()
+    try:
+        cfg = Config.load()
+        cfg.validate_runtime()
+    except ConfigurationError as exc:
+        log.error("Ошибка конфигурации: %s", exc)
+        raise SystemExit(2) from None
+    except Exception as exc:
+        # Do not let Python's unformatted traceback bypass credential redaction.
+        log.error("Ошибка конфигурации (%s). Проверьте окружение и CONFIG_PATH.", type(exc).__name__)
+        raise SystemExit(2) from None
+    if args.check_config:
+        log.info("Конфигурация корректна; сеть и база данных не использовались.")
+        return
     bot = Bot(cfg)
     stop = threading.Event()
     signal.signal(signal.SIGTERM, lambda *a: stop.set())
@@ -295,4 +307,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        log.exception("Не удалось запустить или продолжить работу бота")
+        raise SystemExit(1) from None

@@ -1,3 +1,11 @@
-requests>=2.31,<3
-beautifulsoup4>=4.12,<5
-PyYAML>=6.0,<7
+# Locked direct and transitive dependencies for Python 3.12.
+# Install with --no-deps, then run pip check. See README for updates.
+beautifulsoup4==4.15.0
+certifi==2026.10.19
+charset-normalizer==3.5.2
+idna==3.20
+PyYAML==6.0.3
+requests==2.34.2
+soupsieve==3.0.3
+typing_extensions==4.16.0
+urllib3==2.8.0

@@ -2,4 +2,10 @@ __pycache__/
 *.pyc
 *.db
 .env
+.env.*
+!.env.example
+.venv/
+.pytest_cache/
+*.sqlite*
+*.log
 data/

@@ -1,0 +1,11 @@
+# Only application source, non-secret configuration and tests enter the build.
+**
+!Dockerfile
+!requirements.txt
+!config.yaml
+!app/
+!app/*.py
+!app/collectors/
+!app/collectors/*.py
+!tests/
+!tests/*.py
