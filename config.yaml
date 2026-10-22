@@ -18,7 +18,7 @@ telegram_channels:
     username: rvision_team
 
 websites:
-  # RSS/API у этих сайтов отсутствуют (проверено), поэтому для каждого — отдельный сборщик.
+  # К2: публичный API каталога; КРОК: HTML с фильтром; РТК ИТ: API недоступен без авторизации.
   - key: k2_vacancy
     name: "К2Кибербезопасность — вакансии"
     url: "https://careers.cybersecurity.k2.tech/vacancy"
@@ -26,11 +26,11 @@ websites:
   - key: croc_vacancies
     name: "КРОК — стажировки и вакансии (опыт 0-1 год)"
     url: "https://careers.croc.ru/vacancies/?_sft_expirience=0-1-%D0%B3%D0%BE%D0%B4"
-    type: croc_vacancies    # app/collectors/croc.py: HTML-карточки .vacancy__card-item
+    type: croc_vacancies    # app/collectors/croc.py: EXPERIENCE=0-1 год, полный список и детали
   - key: rtkit_careers
     name: "Ростелеком ИТ (RTKiT) — карьера"
     url: "https://rtkit.ru/careers"
-    type: rtkit_careers     # app/collectors/rtkit.py: SPA, данные извлечены из статического JS-бандла
+    type: rtkit_careers     # app/collectors/rtkit.py: явная ошибка источника; демоданные не используются
 
 rules:
   categories:

@@ -1,122 +1,91 @@
-"""Сборщик вакансий K2 Cybersecurity (careers.cybersecurity.k2.tech/vacancy).
-
-Что проверено на реальных данных:
-- RSS/API у сайта нет;
-- каталог вакансий рендерится JS-блоком Tilda (store.tildaapi.com), прямой запрос к его
-  JSON-эндпоинту отклоняется ("Wrong storepartuid") — интеграция по API невозможна;
-- рабочая схема: sitemap.xml сайта + статические страницы вакансий (отдаются без JS).
-
-Сборщик читает sitemap, берёт страницы-вакансии (исключая корень/служебные /pageNNN),
-загружает каждую страницу и извлекает заголовок (<title>), текст описания и ссылку на
-форму отклика. lastmod из sitemap используется как дата публикации.
-"""
-from __future__ import annotations
-
-import logging
+"""K2: public Tilda catalogue advertised by the page, then complete vacancy pages."""
 import re
-import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
-from urllib.parse import urljoin
-from urllib.robotparser import RobotFileParser
+from urllib.parse import urlencode, urlsplit
 
 from bs4 import BeautifulSoup
 
-from app.collectors.base import http_get
+from app.collectors.website_http import WebsiteSourceError, read_text, read_json, text, same_host_url, job_dates
 from app.models import Item
-
-log = logging.getLogger("k2")
-
-NS = "{http://www.sitemaps.org/schemas/sitemap/0.9}"
-MAX_VACANCY_PAGES = 60
 
 
 class K2Collector:
-    type_key = "k2_vacancy"
+    type_key = 'k2_vacancy'
+    HOST = 'careers.cybersecurity.k2.tech'
+    API = 'https://store.tildaapi.com/api/getproductslist/'
+    CONTENT_TYPES = {'1060', '491', '106', '795', '508', '1095'}
 
     def __init__(self, source):
         self.source = source
 
-    def _sitemap_allowed(self) -> bool:
-        """Уважаем robots.txt сайта."""
-        host = self.source.url.split("//", 1)[1].split("/", 1)[0]
-        try:
-            rp = RobotFileParser()
-            rp.set_url(f"https://{host}/robots.txt")
-            rp.read()
-            return rp.can_fetch("*", f"https://{host}/sitemap.xml")
-        except Exception as e:  # noqa: BLE001
-            log.warning("K2: robots.txt недоступен (%s) — продолжаем с осторожностью", e)
-            return True
-
-    def _vacancy_urls(self) -> list[tuple[str, str | None]]:
-        host = self.source.url.split("//", 1)[1].split("/")[0]
-        sm_url = f"https://{host}/sitemap.xml"
-        resp = http_get(sm_url)
-        resp.raise_for_status()
-        root = ET.fromstring(resp.text)
-        out: list[tuple[str, str | None]] = []
-        for u in root.iter(NS + "url"):
-            loc = (u.findtext(NS + "loc") or "").strip()
-            lastmod = (u.findtext(NS + "lastmod") or "").strip() or None
-            if not loc or f"//{host}" not in loc:
-                continue
-            path = loc.split(host, 1)[1].strip("/")
-            # исключаем корень, саму страницу каталога и служебные страницы Tilda
-            if not path or path == "vacancy" or re.fullmatch(r"page\d+\.html", path):
-                continue
-            if path.endswith((".jpg", ".png", ".css", ".js")):
-                continue
-            out.append((loc, lastmod))
-        return out[:MAX_VACANCY_PAGES]
-
-    @staticmethod
-    def _parse_dt(s: str | None) -> datetime | None:
-        if not s:
-            return None
-        try:
-            dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(timezone.utc)
-        except ValueError:
-            return None
-
     def fetch(self) -> list[Item]:
-        if not self._sitemap_allowed():
-            raise RuntimeError("robots.txt запрещает чтение sitemap — источник недоступен для автосбора")
-        pairs = self._vacancy_urls()
-        items: list[Item] = []
-        for url, lastmod in pairs:
+        url = same_host_url(self.source.url, self.source.url, self.HOST)
+        html = read_text(url)
+        soup = BeautifulSoup(html, 'html.parser')
+        options = re.search(r"var\s+options\s*=\s*\{recid:['\"](\d+)['\"],storepart:['\"](\d+)['\"]", html)
+        if not options or soup.select_one('.js-store') is None:
+            raise WebsiteSourceError('К2: конфигурация публичного каталога не найдена; изменилась разметка.')
+        recid, storepart = options.groups()
+        page, seen_pages, products = '1', set(), {}
+        total = None
+        while page:
+            if page in seen_pages or len(seen_pages) >= self.source.max_pages:
+                raise WebsiteSourceError('К2: повтор страницы или лимит max_pages; частичная выдача отклонена.')
+            seen_pages.add(page)
+            data = read_json(self.API + '?' + urlencode({
+                'storepartuid': storepart, 'recid': recid, 'getparts': 'true', 'getoptions': 'true',
+                'slice': page, 'size': '100', 'flag_root': 'withroot',
+            }))
+            if not isinstance(data, dict) or not isinstance(data.get('products'), list):
+                raise WebsiteSourceError('К2: неверный формат публичного каталога.')
             try:
-                resp = http_get(url)
-                if resp.status_code == 404:
-                    continue  # объявление снято — не присылаем
-                resp.raise_for_status()
-            except Exception as e:  # noqa: BLE001 — одна упавшая страница не ломает источник
-                log.warning("K2: %s не получена: %s", url, e)
-                continue
-            soup = BeautifulSoup(resp.text, "html.parser")
-            title = (soup.title.get_text(strip=True) if soup.title else "") or url.rsplit("/", 1)[-1]
-            main = soup.select_one("#allrecords") or soup.body or soup
-            text = re.sub(r"\s+", " ", main.get_text(" ", strip=True))
-            apply_url = None
-            for a in soup.find_all("a", href=True):
-                href = a["href"]
-                if re.search(r"(hh\.ru|rabota\.yandex|otklik|zayavka|apply)", href, re.I):
-                    apply_url = href
-                    break
-            desc = text[:500]
-            slug = url.rstrip("/").rsplit("/", 1)[-1]
+                current_total = int(data['total'])
+                if current_total < 0 or total is not None and current_total != total:
+                    raise ValueError()
+            except (KeyError, TypeError, ValueError):
+                raise WebsiteSourceError('К2: отсутствует или меняется размер каталога; полнота не подтверждена.') from None
+            total = current_total
+            if total > self.source.max_details:
+                raise WebsiteSourceError('К2: превышен max_details; частичная выдача отклонена.')
+            for product in data['products']:
+                if not isinstance(product, dict) or not product.get('uid') or not product.get('title'):
+                    raise WebsiteSourceError('К2: неполная запись каталога.')
+                identifier = str(product['uid'])
+                if identifier in products:
+                    raise WebsiteSourceError('К2: повтор ID каталога; полнота не подтверждена.')
+                products[identifier] = product
+            page = str(data['nextslice']) if data.get('nextslice') else ''
+        if len(products) != total:
+            raise WebsiteSourceError('К2: получен неполный каталог вакансий.')
+        items, seen_urls = [], set()
+        for product in products.values():
+            target = product.get('url') or product.get('buttonlink')
+            if not target:
+                raise WebsiteSourceError('К2: отсутствует ссылка вакансии.')
+            url = same_host_url(target, self.source.url, self.HOST)
+            path = urlsplit(url).path.rstrip('/')
+            if path in ('', '/vacancy') or url in seen_urls:
+                raise WebsiteSourceError('К2: некорректная или повторная ссылка вакансии.')
+            seen_urls.add(url)
+            detail = BeautifulSoup(read_text(url), 'html.parser')
+            if detail.select_one('.t1060__title') is None:
+                raise WebsiteSourceError('К2: не найден заголовок страницы вакансии.')
+            blocks = [block for block in detail.select('#allrecords > .t-rec')
+                      if block.get('data-record-type') in self.CONTENT_TYPES]
+            content = list(dict.fromkeys(text(block) for block in blocks if text(block)))
+            if len(content) < 3:
+                raise WebsiteSourceError('К2: описание вакансии неполное.')
+            characteristics = product.get('characteristics', [])
+            if not isinstance(characteristics, list):
+                raise WebsiteSourceError('К2: некорректные характеристики вакансии.')
+            tags = [text(x.get('value')) for x in characteristics if isinstance(x, dict)]
+            full_text = '\n'.join(dict.fromkeys(filter(None, [text(product.get('descr')), *tags, *content])))
+            published, deadline = job_dates(detail)
+            apply_url = url + '#form' if detail.select_one('a[name="form"], #form') and detail.select_one('form') else None
             items.append(Item(
-                source_key=self.source.key,
-                source_name=self.source.name,
-                external_id=slug,
-                url=url,
-                title=title,
-                summary=desc,
-                apply_url=apply_url,
-                published_at=self._parse_dt(lastmod),
-                raw_text=f"{title}. {desc}",
+                source_key=self.source.key, source_name=self.source.name,
+                # Preserve the former sitemap collector's slug IDs and seen rows.
+                external_id=path.rsplit('/', 1)[-1], url=url, title=text(product['title']),
+                summary=full_text[:500], raw_text=full_text, apply_url=apply_url,
+                published_at=published, deadline=deadline, registration_status='unknown',
             ))
-        log.info("K2: собрано %d страниц вакансий", len(items))
         return items

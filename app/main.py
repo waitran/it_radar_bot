@@ -58,15 +58,15 @@ class Bot:
             self.db.set_flag("ever_started", "1")
 
     # ---------- сбор одного источника ----------
-    def collect_source(self, key: str, name: str, fetch) -> list[Item]:
+    def collect_source(self, key: str, name: str, fetch) -> list[Item] | None:
         try:
             items = fetch()
-            self.db.set_source_state(key, error=None)
+            self.db.set_source_state(key, error="")
             return items
         except Exception as e:  # noqa: BLE001 — ошибка источника не останавливает остальные
             log.error("источник %s: ошибка сбора: %s", key, e)
             self.db.set_source_state(key, error=str(e)[:300])
-            return []
+            return None
 
     # ---------- обработка найденного объявления ----------
     def process_item(self, item: Item, *, baseline: bool) -> bool:
@@ -142,8 +142,13 @@ class Bot:
         errors: list[str] = []
 
         # сначала ретрайд неотправленного (после рестарта/ошибок сети)
+        unverified_sources = {w.key for w in self.cfg.websites if w.type == "rtkit_careers"}
         if enabled:
             for row in self.db.pending_unnotified():
+                # Old RTKit collectors stored disabled demo fixtures. Preserve
+                # those rows, but never deliver them as real opportunities.
+                if row["source_key"] in unverified_sources:
+                    continue
                 item = self._item_from_row(row)
                 if self.deliver(item):
                     notified += 1
@@ -198,7 +203,9 @@ class Bot:
                 continue
             collector = cls(w)
             items = self.collect_source(w.key, w.name, collector.fetch)
-            n_found, n_new = handle_source(w.key, items)
+            if items is None:
+                continue
+            n_found, n_new = handle_source(w.key, items, initial_snapshot=not self.db.source_initialized(w.key))
             found += n_found
             new_count += n_new
 

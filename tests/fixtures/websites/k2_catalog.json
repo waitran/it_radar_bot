@@ -1,0 +1,152 @@
+{
+  "total": 7,
+  "products": [
+    {
+      "uid": 754084369041,
+      "title": "Руководитель проектов ИБ",
+      "descr": "Ищем Руководителя проектов ИБ, который будет работать над комплексными проектами, выстраивать связи с командой инженеров/аналитиков ИБ, коллегами из&nbsp;смежных направлений и&nbsp;клиентами.",
+      "buttonlink": "https://careers.cybersecurity.k2.tech/rukovoditel-proektov-ib",
+      "url": "https://careers.cybersecurity.k2.tech/rukovoditel-proektov-ib",
+      "characteristics": [
+        {
+          "title": "Занятость",
+          "value": "Полная занятость"
+        },
+        {
+          "title": "Локация",
+          "value": "Москва"
+        },
+        {
+          "title": "Направление",
+          "value": "Управление проектами"
+        }
+      ]
+    },
+    {
+      "uid": 209195884361,
+      "title": "Менеджер по продвижению ИТ-решений",
+      "descr": "В команду развития бизнеса ищем Менеджера по продвижению ИТ-решений. Тебе нужно будет заниматься развитием решений нашего портфеля: классические системы защиты (NGFW, DLP, WAF и др.), сервисы ИБ, услуги собственного центра мониторинга кибербезопасности.",
+      "buttonlink": "https://careers.cybersecurity.k2.tech/menedzher-po-prodvizheniyu-it-reshenij",
+      "url": "https://careers.cybersecurity.k2.tech/menedzher-po-prodvizheniyu-it-reshenij",
+      "characteristics": [
+        {
+          "title": "Занятость",
+          "value": "Полная занятость"
+        },
+        {
+          "title": "Локация",
+          "value": "Москва"
+        },
+        {
+          "title": "Направление",
+          "value": "Развитие бизнеса"
+        }
+      ]
+    },
+    {
+      "uid": 580302460613,
+      "title": "Ведущий инженер по информационной безопасности",
+      "descr": "Ищем ведущего инженера по&nbsp;информационной безопасности для комплексного проектирования и&nbsp;внедрения систем защиты: от&nbsp;анализа инфраструктуры и&nbsp;выбора решений до&nbsp;координации проектной команды.",
+      "buttonlink": "https://careers.cybersecurity.k2.tech/veduschiy-inzhener-po-informacionnoy-bezopasnosti",
+      "url": "https://careers.cybersecurity.k2.tech/veduschiy-inzhener-po-informacionnoy-bezopasnosti",
+      "characteristics": [
+        {
+          "title": "Занятость",
+          "value": "Полная занятость"
+        },
+        {
+          "title": "Локация",
+          "value": "Москва"
+        },
+        {
+          "title": "Направление",
+          "value": "Защита ИТ-инфраструктуры"
+        }
+      ]
+    },
+    {
+      "uid": 702811527262,
+      "title": "Стажер-аналитик SOC",
+      "descr": "Эта вакансия подходит студентам «Информационной безопасности», желающим приобрести практический опыт в задачах аналитика SOC.",
+      "buttonlink": "https://careers.cybersecurity.k2.tech/stazher-analitik-soc",
+      "url": "https://careers.cybersecurity.k2.tech/stazher-analitik-soc",
+      "characteristics": [
+        {
+          "title": "Занятость",
+          "value": "Стажировка"
+        },
+        {
+          "title": "Локация",
+          "value": "Москва"
+        },
+        {
+          "title": "Направление",
+          "value": "SOC"
+        }
+      ]
+    },
+    {
+      "uid": 424005317953,
+      "title": "Менеджер по продвижению ИБ-решений (BDM)",
+      "descr": "Ищем BDM для развития портфеля решений информационной безопасности&nbsp;— от&nbsp;NGFW, DLP и&nbsp;WAF до&nbsp;облачных ИБ-сервисов и&nbsp;собственного SOC.",
+      "buttonlink": "https://careers.cybersecurity.k2.tech/bdm",
+      "url": "https://careers.cybersecurity.k2.tech/bdm",
+      "characteristics": [
+        {
+          "title": "Занятость",
+          "value": "Полная занятость"
+        },
+        {
+          "title": "Локация",
+          "value": "Москва"
+        },
+        {
+          "title": "Направление",
+          "value": "Развитие бизнеса"
+        }
+      ]
+    },
+    {
+      "uid": 881931945423,
+      "title": "Ведущий менеджер по развитию бизнеса (Retail) / Lead BDM в ИБ",
+      "descr": "Ищем Lead BDM в&nbsp;ИБ, которому предстоит развивать бизнес в&nbsp;сегменте Retail, формировать предложения под потребности крупнейших ритейлеров и&nbsp;вести ключевые сделки.",
+      "buttonlink": "https://careers.cybersecurity.k2.tech/lead-bdm",
+      "url": "https://careers.cybersecurity.k2.tech/lead-bdm",
+      "characteristics": [
+        {
+          "title": "Занятость",
+          "value": "Полная занятость"
+        },
+        {
+          "title": "Локация",
+          "value": "Москва"
+        },
+        {
+          "title": "Направление",
+          "value": "Развитие бизнеса"
+        }
+      ]
+    },
+    {
+      "uid": 670168719853,
+      "title": "Стажер технической поддержки ИБ",
+      "descr": "Вакансия для старта в&nbsp;ИБ и&nbsp;знакомства с&nbsp;современными средствами защиты информации на&nbsp;практике.",
+      "buttonlink": "https://careers.cybersecurity.k2.tech/stazher-tehnicheskoy-podderzhki-ib",
+      "url": "https://careers.cybersecurity.k2.tech/stazher-tehnicheskoy-podderzhki-ib",
+      "characteristics": [
+        {
+          "title": "Занятость",
+          "value": "Стажировка"
+        },
+        {
+          "title": "Локация",
+          "value": "Москва"
+        },
+        {
+          "title": "Направление",
+          "value": "Техническая поддержка средств защиты"
+        }
+      ]
+    }
+  ]
+}

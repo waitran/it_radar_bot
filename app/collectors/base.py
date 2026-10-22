@@ -33,3 +33,18 @@ def http_get(url: str, *, timeout: int = 25, headers: dict | None = None,
         _last_request_at = time.monotonic()
     resp.raise_for_status()
     return resp
+
+
+def http_post_json(url: str, payload: dict, *, timeout: int = 25) -> requests.Response:
+    """Public read APIs that use POST; shares pacing with all GET requests."""
+    global _last_request_at
+    wait = _MIN_INTERVAL - (time.monotonic() - _last_request_at)
+    if wait > 0:
+        time.sleep(wait)
+    try:
+        resp = requests.post(url, json=payload, timeout=timeout,
+                             headers={"User-Agent": USER_AGENT}, allow_redirects=False)
+    finally:
+        _last_request_at = time.monotonic()
+    resp.raise_for_status()
+    return resp

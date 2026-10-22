@@ -12,3 +12,6 @@
 !tests/fixtures/
 !tests/fixtures/telegram/
 !tests/fixtures/telegram/*.html
+!tests/fixtures/websites/
+!tests/fixtures/websites/*.html
+!tests/fixtures/websites/*.json

@@ -35,6 +35,8 @@ class HttpSource:
     name: str
     url: str
     type: str  # generic http collector key: croc_vacancies | k2_vacancy | rtkit_careers
+    max_pages: int = 20
+    max_details: int = 150
 
 
 @dataclass
@@ -100,9 +102,13 @@ class Config:
                     or type(channel.max_pages) is not int or channel.max_pages < 1):
                 raise ConfigurationError("Некорректный username или max_pages Telegram-канала.")
         websites = [
-            HttpSource(key=w["key"], name=w["name"], url=w["url"], type=w["type"])
+            HttpSource(key=w["key"], name=w["name"], url=w["url"], type=w["type"],
+                       max_pages=w.get("max_pages", 20), max_details=w.get("max_details", 150))
             for w in raw.get("websites", [])
         ]
+        for website in websites:
+            if any(type(value) is not int or value < 1 for value in (website.max_pages, website.max_details)):
+                raise ConfigurationError("max_pages и max_details сайта должны быть положительными целыми числами.")
         rules_raw = raw.get("rules", {})
         categories = {}
         for cat_key, cat in (rules_raw.get("categories") or {}).items():
