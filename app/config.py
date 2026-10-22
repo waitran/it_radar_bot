@@ -18,6 +18,7 @@ class TelegramChannelSource:
     key: str
     username: str  # без @, например rostelecom_tech
     type: str = "telegram_channel"
+    max_pages: int = 25
 
     @property
     def web_url(self) -> str:
@@ -90,9 +91,14 @@ class Config:
             raw = yaml.safe_load(f) or {}
 
         channels = [
-            TelegramChannelSource(key=ch["key"], username=ch["username"].lstrip("@"))
+            TelegramChannelSource(key=ch["key"], username=ch["username"].lstrip("@"),
+                                  max_pages=ch.get("max_pages", 25))
             for ch in raw.get("telegram_channels", [])
         ]
+        for channel in channels:
+            if (not re.fullmatch(r"[A-Za-z0-9_]{1,64}", channel.username)
+                    or type(channel.max_pages) is not int or channel.max_pages < 1):
+                raise ConfigurationError("Некорректный username или max_pages Telegram-канала.")
         websites = [
             HttpSource(key=w["key"], name=w["name"], url=w["url"], type=w["type"])
             for w in raw.get("websites", [])

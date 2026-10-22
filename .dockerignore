@@ -9,3 +9,6 @@
 !app/collectors/*.py
 !tests/
 !tests/*.py
+!tests/fixtures/
+!tests/fixtures/telegram/
+!tests/fixtures/telegram/*.html

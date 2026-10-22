@@ -150,12 +150,12 @@ class Bot:
                 else:
                     break  # канал доставки недоступен — попробуем в следующем цикле
 
-        def handle_source(key: str, items: list[Item]) -> tuple[int, int]:
+        def handle_source(key: str, items: list[Item], *, initial_snapshot: bool = False) -> tuple[int, int]:
             nonlocal notified
             first = not self.db.source_initialized(key)
             # При выключенной рассылке (/stop) новые объявления только запоминаем,
             # чтобы после /start не прислать накопившийся архив.
-            baseline = True if not enabled else (first and not self.is_enabled_ever())
+            baseline = True if initial_snapshot or not enabled else (first and not self.is_enabled_ever())
             to_send: list[Item] = []
             for it in items:
                 if self.process_item(it, baseline=baseline):
@@ -173,11 +173,22 @@ class Bot:
 
         # Telegram-каналы: только открытые веб-страницы t.me/s/<username>
         for ch in self.cfg.channels:
-            items = self.collect_source(ch.key, ch.display_name,
-                                        lambda u=ch.username: telegram_channel.fetch_channel(u))
-            n_found, n_new = handle_source(ch.key, items)
-            found += n_found
-            new_count += n_new
+            source_key = f"tg_{ch.username.lower()}"  # Existing seen_items keys remain unchanged.
+            try:
+                cursor = self.db.telegram_cursor(source_key)
+                # Persist the legacy boundary before processing, so a crash partway
+                # through ingestion cannot turn a partial batch into a new cursor.
+                self.db.save_telegram_cursor(source_key, cursor)
+                items = telegram_channel.fetch_channel(ch.username, since_id=cursor, max_pages=ch.max_pages)
+                n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None)
+                if items:
+                    self.db.save_telegram_cursor(source_key, max(int(it.external_id) for it in items))
+                self.db.set_source_state(ch.key, error="")
+                found += n_found
+                new_count += n_new
+            except Exception as exc:
+                log.error("источник %s: ошибка Telegram: %s", ch.key, exc)
+                self.db.set_source_state(ch.key, error=str(exc)[:300])
 
         # Сайты
         for w in self.cfg.websites:
@@ -192,7 +203,7 @@ class Bot:
             new_count += n_new
 
         # состояние ошибок источников
-        for key in [f"tg_{c.username.lower()}" for c in self.cfg.channels] + [w.key for w in self.cfg.websites]:
+        for key in [c.key for c in self.cfg.channels] + [w.key for w in self.cfg.websites]:
             err = self.db.get_source_error(key)
             if err:
                 errors.append(f"{key}: {err}")

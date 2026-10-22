@@ -18,7 +18,8 @@ _MIN_INTERVAL = 2.0
 _last_request_at = 0.0
 
 
-def http_get(url: str, *, timeout: int = 25, headers: dict | None = None) -> requests.Response:
+def http_get(url: str, *, timeout: int = 25, headers: dict | None = None,
+             allow_redirects: bool = True) -> requests.Response:
     global _last_request_at
     wait = _MIN_INTERVAL - (time.monotonic() - _last_request_at)
     if wait > 0:
@@ -26,7 +27,9 @@ def http_get(url: str, *, timeout: int = 25, headers: dict | None = None) -> req
     h = {"User-Agent": USER_AGENT, "Accept-Language": "ru,en;q=0.8"}
     if headers:
         h.update(headers)
-    resp = requests.get(url, timeout=timeout, headers=h)
-    _last_request_at = time.monotonic()
+    try:
+        resp = requests.get(url, timeout=timeout, headers=h, allow_redirects=allow_redirects)
+    finally:
+        _last_request_at = time.monotonic()
     resp.raise_for_status()
     return resp

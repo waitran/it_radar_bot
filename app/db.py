@@ -109,6 +109,31 @@ class Database:
         with self._lock:
             return self._conn.execute("SELECT COUNT(*) c FROM seen_items").fetchone()["c"]
 
+    def telegram_cursor(self, source_key: str) -> int | None:
+        """Reuse legacy seen IDs on upgrade; never recreate or delete the DB."""
+        saved = self.get_flag("telegram_cursor:" + source_key)
+        if saved == "initializing":
+            return None
+        if saved is not None:
+            value = int(saved)
+            if value < 1:
+                raise ValueError("Invalid Telegram cursor")
+            return value
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT MAX(CAST(external_id AS INTEGER)) FROM seen_items WHERE source_key=? "
+                "AND external_id <> '' AND external_id NOT GLOB '*[^0-9]*'",
+                (source_key,),
+            ).fetchone()
+            return row[0] if row[0] and row[0] > 0 else None
+
+    def save_telegram_cursor(self, source_key: str, value: int | None) -> None:
+        # A first snapshot interrupted during ingestion must remain a baseline
+        # on restart, even if some rows have already reached seen_items.
+        if value is not None and (type(value) is not int or value < 1):
+            raise ValueError("Invalid Telegram cursor")
+        self.set_flag("telegram_cursor:" + source_key, str(value) if value is not None else "initializing")
+
     def source_initialized(self, source_key: str) -> bool:
         with self._lock:
             row = self._conn.execute(
