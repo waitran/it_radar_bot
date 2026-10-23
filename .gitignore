@@ -9,3 +9,6 @@ __pycache__/
 *.sqlite*
 *.log
 data/
+*.db.lock
+*.before-delivery-*.bak
+*.db-*

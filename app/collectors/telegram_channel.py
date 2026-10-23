@@ -126,23 +126,30 @@ def _parse_page(html: str, username: str) -> tuple[list[Item], int | None]:
             apply_url=_application_url(text_node) if text_node else None,
             published_at=published_at,
         )
-    older = soup.select("a.tme_messages_more[data-before]")
-    if soup.select("a.tme_messages_more") and not older:
-        raise TelegramSourceError("Изменена разметка пагинации Telegram.")
     before = None
-    for anchor in older:
+    for anchor in soup.select("a.tme_messages_more"):
         try:
+            directions = [direction for direction in ("before", "after") if anchor.has_attr("data-"+direction)]
+            if len(directions) != 1:
+                raise ValueError("unknown pagination")
+            direction = directions[0]
             parsed = urlsplit(urljoin(f"https://t.me/s/{username}", anchor.get("href", "")))
             query = parse_qsl(parsed.query, keep_blank_values=True)
             if (parsed.scheme != "https" or parsed.netloc != "t.me" or parsed.fragment
                     or parsed.path.lower() != f"/s/{username.lower()}"
-                    or len(query) != 1 or query[0][0] != "before" or not query[0][1].isdigit()
-                    or query[0][1] != anchor["data-before"]):
+                    or len(query) != 1 or query[0][0] != direction or not query[0][1].isdigit()
+                    or query[0][1] != anchor["data-"+direction]):
                 raise ValueError("invalid page link")
             candidate = int(query[0][1])
-            if candidate != min(items) or before is not None and before != candidate:
+            boundary = min(items) if direction == "before" else max(items)
+            if candidate != boundary:
                 raise ValueError("invalid cursor")
-            before = candidate
+            if direction == "before":
+                if before is not None and before != candidate:
+                    raise ValueError("conflicting cursor")
+                before = candidate
+            # Old history pages also advertise newer messages. Validate that
+            # link, but never follow it when walking backwards or refreshing a post.
         except ValueError:
             raise TelegramSourceError("Неожиданная ссылка пагинации; переход не выполнялся.") from None
     return [items[key] for key in sorted(items)], before
@@ -191,3 +198,17 @@ def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int 
             return [results[key] for key in sorted(results)]
         before = next_before
     raise TelegramSourceError("Достигнут max_pages до сохранённого ID. Увеличьте max_pages; граница не сдвинута.")
+
+
+def fetch_post(username: str, post_id: int) -> Item | None:
+    """Re-read a queued post from a public history page before retrying delivery."""
+    if not USERNAME.fullmatch(username) or type(post_id) is not int or post_id < 1:
+        raise TelegramSourceError('Некорректный ID для повторной проверки.')
+    try:
+        response = http_get(f'https://t.me/s/{username}?before={post_id + 1}', allow_redirects=False)
+    except requests.RequestException as exc:
+        raise TelegramSourceError(f'Повторная проверка Telegram: {type(exc).__name__}.') from None
+    if response.status_code != 200 or len(response.content) > 8_000_000:
+        raise TelegramSourceError('Публичная страница для повторной проверки недоступна.')
+    items, _ = _parse_page(response.text, username)
+    return next((item for item in items if int(item.external_id) == post_id), None)

@@ -320,7 +320,8 @@ class WebsiteIntegrationTests(unittest.TestCase):
             self.bot.run_cycle()
         self.bot.notifier.send.assert_not_called()
         self.assertTrue(self.bot.db.exists(old.item_key))
-        self.assertEqual(len(self.bot.db.pending_unnotified()),1)
+        self.assertEqual(len(self.bot.db.pending_unnotified()),0)
+        self.assertEqual(self.bot.db.item_row(old.item_key)['delivery_state'],'skipped')
 
 
 if __name__ == '__main__':
