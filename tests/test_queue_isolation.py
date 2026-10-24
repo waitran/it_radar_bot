@@ -35,7 +35,7 @@ class QueueIsolationTests(unittest.TestCase):
         bot = Bot(cfg)
         self.addCleanup(bot.db.close)
         bot.notifier.send = Mock(return_value=DeliveryResult('sent',message_id=42))
-        bot.db._conn.executemany('INSERT INTO users VALUES(?,NULL,1,0,0,1)', ((uid,) for uid in range(1,10001)))
+        bot.db._conn.executemany('INSERT INTO users(telegram_id,username,is_active,created_at,updated_at,subscribed_at) VALUES(?,NULL,1,0,0,1)', ((uid,) for uid in range(1,10001)))
         bot.db._conn.commit()
         dead = item('1','tg_dead'); dead.published_at = self.now
         bot.db.add_item(dead,category='internships')

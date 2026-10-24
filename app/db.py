@@ -13,7 +13,7 @@ from app.dedup import identities
 import threading
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 COMMAND_REPLY_INTERVAL = 5.0
 
 SCHEMA = """
@@ -128,6 +128,10 @@ class Database:
                     is_active INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0,1)),
                     created_at REAL NOT NULL, updated_at REAL NOT NULL,
                     subscribed_at REAL NOT NULL)""")
+                user_columns = {row[1] for row in self._conn.execute('PRAGMA table_info(users)')}
+                for name in ('subscription_version','subscription_epoch'):
+                    if name not in user_columns:
+                        self._conn.execute(f'ALTER TABLE users ADD COLUMN {name} INTEGER NOT NULL DEFAULT 1')
                 self._conn.execute("""CREATE TABLE IF NOT EXISTS user_deliveries (
                     id INTEGER PRIMARY KEY, telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
                     item_key TEXT NOT NULL REFERENCES seen_items(item_key),
@@ -146,6 +150,13 @@ class Database:
                 self._conn.execute("""CREATE TABLE IF NOT EXISTS command_replies (
                     telegram_id INTEGER PRIMARY KEY, text TEXT NOT NULL, status TEXT NOT NULL,
                     available_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL)""")
+                if 'generation' not in {row[1] for row in self._conn.execute('PRAGMA table_info(command_replies)')}:
+                    self._conn.execute('ALTER TABLE command_replies ADD COLUMN generation INTEGER NOT NULL DEFAULT 1')
+                largest = self._conn.execute('SELECT COALESCE(MAX(generation),0) FROM command_replies').fetchone()[0]
+                sequence = self._conn.execute("SELECT value FROM flags WHERE name='reply_generation'").fetchone()
+                generation = max(largest,int(sequence[0]) if sequence else 0)
+                self._conn.execute("""INSERT INTO flags VALUES('reply_generation',?)
+                    ON CONFLICT(name) DO UPDATE SET value=excluded.value""",(str(generation),))
                 self._conn.execute("UPDATE command_replies SET status='uncertain' WHERE status='sending'")
                 self._conn.execute("""CREATE TABLE IF NOT EXISTS command_reply_limits (
                     telegram_id INTEGER PRIMARY KEY, reply_after REAL NOT NULL)""")
@@ -168,7 +179,7 @@ class Database:
             if owner_id and legacy:
                 enabled = self._conn.execute("SELECT value FROM flags WHERE name='enabled'").fetchone()
                 now = time.time()
-                self._conn.execute("INSERT OR IGNORE INTO users VALUES(?,NULL,?,?,?,?)",
+                self._conn.execute("INSERT OR IGNORE INTO users(telegram_id,username,is_active,created_at,updated_at,subscribed_at) VALUES(?,NULL,?,?,?,?)",
                                    (owner_id, int(bool(enabled and enabled[0]=='1')), now, now, 0))
                 self._conn.execute("""INSERT OR IGNORE INTO user_deliveries
                     (telegram_id,item_key,status,attempts,available_at,telegram_message_id,reason,sent_at)
@@ -192,22 +203,39 @@ class Database:
         now = time.time()
         with self._lock, self._conn:
             if active is not None:
-                self._conn.execute("""INSERT INTO users VALUES(?,?,?,?,?,?)
+                self._conn.execute("""INSERT INTO users(telegram_id,username,is_active,created_at,updated_at,subscribed_at) VALUES(?,?,?,?,?,?)
                     ON CONFLICT(telegram_id) DO UPDATE SET username=excluded.username,
                     subscribed_at=CASE WHEN users.is_active=0 AND excluded.is_active=1
                         THEN excluded.subscribed_at ELSE users.subscribed_at END,
+                    subscription_version=users.subscription_version+1,
+                    subscription_epoch=users.subscription_epoch+CASE WHEN users.is_active<>excluded.is_active THEN 1 ELSE 0 END,
                     is_active=excluded.is_active,updated_at=excluded.updated_at""",
                     (telegram_id,username,int(active),now,now,now))
                 if not active:
                     self._conn.execute("UPDATE user_deliveries SET status='skipped',reason='paused' WHERE telegram_id=? AND status IN ('pending','suspended')", (telegram_id,))
             if reply is not None:
+                sequence = self._conn.execute("SELECT value FROM flags WHERE name='reply_generation'").fetchone()
+                generation = int(sequence[0])+1
+                self._conn.execute("UPDATE flags SET value=? WHERE name='reply_generation'",(str(generation),))
                 # One outstanding answer per chat; a newer command replaces an older answer.
                 self._conn.execute("DELETE FROM command_replies WHERE status='pending' AND telegram_id<>? AND telegram_id IN (SELECT telegram_id FROM command_replies WHERE status='pending' ORDER BY updated_at DESC LIMIT -1 OFFSET 999)", (telegram_id,))
-                self._conn.execute("""INSERT INTO command_replies VALUES(?,?,'pending',0,?)
+                self._conn.execute("""INSERT INTO command_replies(telegram_id,text,status,available_at,updated_at,generation) VALUES(?,?,'pending',0,?,?)
                     ON CONFLICT(telegram_id) DO UPDATE SET text=excluded.text,status='pending',
-                    available_at=0,updated_at=excluded.updated_at""", (telegram_id,reply,now))
+                    available_at=0,updated_at=excluded.updated_at,generation=excluded.generation""", (telegram_id,reply,now,generation))
             if offset is not None:
                 self._conn.execute("INSERT INTO flags VALUES('offset',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (str(offset),))
+
+    def deactivate_if_version(self, telegram_id, version):
+        """A late 403 must not undo a newer subscription command."""
+        with self._lock, self._conn:
+            changed = self._conn.execute("""UPDATE users SET is_active=0,updated_at=?,
+                subscription_version=subscription_version+1,subscription_epoch=subscription_epoch+1
+                WHERE telegram_id=? AND is_active=1 AND subscription_version=?""",
+                (time.time(),telegram_id,version)).rowcount == 1
+            if changed:
+                self._conn.execute("""UPDATE user_deliveries SET status='skipped',reason='blocked'
+                    WHERE telegram_id=? AND status IN ('pending','suspended')""",(telegram_id,))
+            return changed
 
     def pending_reply(self, now):
         with self._lock:
@@ -216,13 +244,14 @@ class Database:
                 WHERE r.status='pending' AND r.available_at<=? AND COALESCE(l.reply_after,0)<=?
                 ORDER BY r.updated_at,r.telegram_id LIMIT 1""", (now,now)).fetchone()
 
-    def claim_command_reply(self, telegram_id, now):
+    def claim_command_reply(self, telegram_id, now, *, generation=None):
         """Claim once and persist the per-chat response limit before the HTTP attempt."""
         with self._lock, self._conn:
             claimed = self._conn.execute("""UPDATE command_replies SET status='sending'
                 WHERE telegram_id=? AND status='pending' AND available_at<=?
+                AND (? IS NULL OR generation=?)
                 AND COALESCE((SELECT reply_after FROM command_reply_limits WHERE telegram_id=?),0)<=?""",
-                (telegram_id,now,telegram_id,now)).rowcount == 1
+                (telegram_id,now,generation,generation,telegram_id,now)).rowcount == 1
             if claimed:
                 self._conn.execute('DELETE FROM command_reply_limits WHERE reply_after<=?', (now,))
                 self._conn.execute("""INSERT INTO command_reply_limits VALUES(?,?)
@@ -230,12 +259,15 @@ class Database:
                     (telegram_id,now+COMMAND_REPLY_INTERVAL))
             return claimed
 
-    def set_reply_state(self, telegram_id, status, available_at=0):
+    def set_reply_state(self, telegram_id, status, available_at=0, *, generation=None):
         with self._lock, self._conn:
             if status == 'sent':
-                self._conn.execute("DELETE FROM command_replies WHERE telegram_id=?", (telegram_id,))
+                self._conn.execute("DELETE FROM command_replies WHERE telegram_id=? AND (? IS NULL OR generation=?)",
+                                   (telegram_id,generation,generation))
             else:
-                self._conn.execute("UPDATE command_replies SET status=?,available_at=? WHERE telegram_id=?", (status,available_at,telegram_id))
+                self._conn.execute("""UPDATE command_replies SET status=?,available_at=?
+                    WHERE telegram_id=? AND (? IS NULL OR generation=?)""",
+                    (status,available_at,telegram_id,generation,generation))
 
     def fill_user_queue(self, *, capacity=10000, batch=500,
                         available_sources=None, configured_sources=None, blocked_items=()):

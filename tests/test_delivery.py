@@ -315,7 +315,7 @@ class DeliveryTests(BotFixture):
         self.assertEqual(self.bot.notifier.send.call_count,1)
         self.assertEqual(self.bot.db.user_delivery(123,'tg_example:3')['status'],'sent')
 
-    def test_stop_waits_for_inflight_request_but_blocks_next(self):
+    def test_stop_commits_during_inflight_request_and_blocks_next(self):
         first=self.queue('1');second=self.queue('2')
         entered,released,stopped=threading.Event(),threading.Event(),threading.Event()
         def send(text, **kwargs):
@@ -325,7 +325,8 @@ class DeliveryTests(BotFixture):
         sender=threading.Thread(target=lambda:self.bot.deliver(first,now=NOW));sender.start()
         self.assertTrue(entered.wait(2))
         stopper=threading.Thread(target=lambda:(self.bot.set_enabled(False),stopped.set()));stopper.start()
-        self.assertFalse(stopped.wait(.05))
+        self.assertTrue(stopped.wait(1))
+        self.assertEqual(self.bot.db.user_delivery(123,first.item_key)['status'],'sending')
         released.set();sender.join(3);stopper.join(3)
         self.assertTrue(stopped.is_set())
         self.assertFalse(self.bot.deliver(second,now=NOW+timedelta(seconds=5)))

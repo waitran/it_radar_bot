@@ -46,6 +46,7 @@ class Bot:
         self.filters = Filters(cfg.rules)
         # Флаг рассылки: /start включает, /stop выключает. Сохраняется в БД — переживает рестарт.
         self._lock = threading.RLock()
+        self._send_lock = threading.RLock()  # HTTP slots serialize independently of command state
         self.stop_event = threading.Event()
         self.scan_requested = threading.Event()
         self._scan_running = False
@@ -90,52 +91,65 @@ class Bot:
         self.db.bind_identity("bot_id", me["id"])
         self.bot_username = me["username"].lower()
 
+    def _transmit(self, message, telegram_id, *, version, timestamp):
+        """Caller owns _send_lock, never _lock, while Telegram is in flight."""
+        try:
+            result = self.notifier.send(message,chat_id=telegram_id)
+        except Exception:
+            with self._lock:
+                self.db.set_flag('send_after',str(max(float(self.db.get_flag('send_after','0')),
+                                                     max(timestamp,time.time())+1.1)))
+            raise
+        completed = max(timestamp,time.time())
+        with self._lock:
+            delay = max(1.1,result.retry_after) if result.status == 'retry' and result.code == 429 else 1.1
+            self.db.set_flag('send_after',str(max(float(self.db.get_flag('send_after','0')),completed+delay)))
+            if result.code == 403 and version is not None:
+                self.db.deactivate_if_version(telegram_id,version)
+            if result.code == 401:
+                self.fatal_error = 'Telegram token rejected'
+                self.stop_event.set()
+        return result,completed
+
     def service_message(self, text, telegram_id=None):
         telegram_id = self.cfg.owner_id if telegram_id is None else telegram_id
         if telegram_id <= 0:
             return
-        with self._lock:
-            if self.stop_event.is_set():
-                return
-            delay = float(self.db.get_flag("send_after", "0")) - time.time()
-            if delay > 1.1:
-                return  # A server-imposed rate limit: do not block command handling.
-            if delay > 0 and self.stop_event.wait(delay):
-                return
-            self.db.set_flag('send_after',str(time.time()+1.1))
-            self.db.set_flag('last_send_kind','command')
-            result = self.notifier.send(escaped_clip(text, 3800), chat_id=telegram_id)
-            if result.status == "sent":
-                self.db.set_flag("send_after",str(time.time()+1.1))
-            if result.status == "retry" and result.code == 429:
-                self.db.set_flag("send_after",str(time.time()+result.retry_after))
-            if result.code == 403:
-                self.db.user_control(telegram_id, active=False)
-            if result.code == 401:
-                self.fatal_error = "Telegram token rejected"
-                self.stop_event.set()
+        with self._send_lock:
+            with self._lock:
+                if self.stop_event.is_set() or float(self.db.get_flag('send_after','0')) > time.time():
+                    return
+                user = self.db.user(telegram_id)
+                version = user['subscription_version'] if user else None
+                timestamp = time.time()
+                self.db.set_flag('send_after',str(timestamp+1.1))
+                self.db.set_flag('last_send_kind','command')
+            result,_ = self._transmit(escaped_clip(text,3800),telegram_id,version=version,timestamp=timestamp)
             return result
 
     def flush_command_reply(self):
-        with self._lock:
-            if self.stop_event.is_set() or float(self.db.get_flag('send_after','0')) > time.time():
-                return
-            row = self.db.pending_reply(time.time())
-            if not row:
-                return
-            if not self.db.claim_command_reply(row['telegram_id'], time.time()):
-                return False
+        with self._send_lock:
+            with self._lock:
+                if self.stop_event.is_set() or float(self.db.get_flag('send_after','0')) > time.time():
+                    return False
+                row = self.db.pending_reply(time.time())
+                if not row or not self.db.claim_command_reply(row['telegram_id'],time.time(),generation=row['generation']):
+                    return False
             try:
-                result = self.service_message(row['text'], telegram_id=row['telegram_id'])
+                result = self.service_message(row['text'],telegram_id=row['telegram_id'])
             except Exception:
-                self.db.set_reply_state(row['telegram_id'], 'uncertain')
+                with self._lock:
+                    self.db.set_reply_state(row['telegram_id'],'uncertain',generation=row['generation'])
                 raise
-            if result is None:
-                self.db.set_reply_state(row['telegram_id'], 'pending')
-            elif result.status == 'retry':
-                self.db.set_reply_state(row['telegram_id'], 'pending', time.time()+max(10,result.retry_after))
-            else:
-                self.db.set_reply_state(row['telegram_id'], result.status)
+            with self._lock:
+                # New commands can replace the outbox row while this HTTP is in flight.
+                # A result belongs only to the claimed generation, never to that newer row.
+                if result is None:
+                    self.db.set_reply_state(row['telegram_id'],'pending',generation=row['generation'])
+                elif result.status == 'retry':
+                    self.db.set_reply_state(row['telegram_id'],'pending',time.time()+max(10,result.retry_after),generation=row['generation'])
+                else:
+                    self.db.set_reply_state(row['telegram_id'],result.status,generation=row['generation'])
             return result is not None
 
     def check_request_reply(self, now):
@@ -152,20 +166,22 @@ class Bot:
                          else "Рассылка выключена: пришлю только итог, без объявлений."))
 
     def flush_check_summary(self):
-        with self._lock:
-            if self.stop_event.is_set() or self.db.get_flag("check_summary_pending") != "1":
-                return
-            if float(self.db.get_flag("send_after", "0")) - time.time() > 1.1:
-                return
-            # Claim before HTTP: an ambiguous response must not duplicate reports.
-            self.db.set_flag("check_summary_pending", "0")
+        with self._send_lock:
+            with self._lock:
+                if self.stop_event.is_set() or self.db.get_flag('check_summary_pending') != '1':
+                    return False
+                if float(self.db.get_flag('send_after','0')) > time.time():
+                    return False
+                text = self.db.get_flag('check_summary','Итог проверки недоступен.')
+                self.db.set_flag('check_summary_pending','0')
             try:
-                result = self.service_message(self.db.get_flag("check_summary", "Итог проверки недоступен."))
+                result = self.service_message(text)
             except Exception:
-                log.exception("Не удалось отправить итог /check; он сохранён для оператора")
+                log.exception('Не удалось отправить итог /check; он сохранён для оператора')
                 return True
-            if result is None or result.status == "retry":
-                self.db.set_flag("check_summary_pending", "1")
+            with self._lock:
+                if result is None or result.status == 'retry':
+                    self.db.set_flag('check_summary_pending','1')
             return result is not None
 
     def run_cycle(self):
@@ -272,51 +288,49 @@ class Bot:
     def deliver(self, item, *, telegram_id=None, now=None):
         now = now or datetime.now(timezone.utc)
         telegram_id = self.cfg.owner_id if telegram_id is None else telegram_id
-        with self._lock:
-            self.fill_delivery_queue(now)
-            row = self.db.user_delivery(telegram_id, item.item_key)
-            user = self.db.user(telegram_id)
-            if (not row or row['status'] != 'pending' or row['available_at'] > now.timestamp()
-                    or not user or not user['is_active'] or self.stop_event.is_set()):
-                return False
-            if float(self.db.get_flag('send_after', '0')) > now.timestamp():
-                return False
-            accepted, reason = self.filters.check(item, now=now)
-            if not accepted:
-                self.db.finish_user_delivery(row['id'], 'expired', reason)
-                return False
-            self.db.refresh_pending(item)
-            message = self.format_message(item)
-            if not self.db.claim_user_delivery(row['id'], now):
-                return False
-            self.db.set_flag('send_after', str(max(now.timestamp(),time.time())+1.1))
-            self.db.set_flag('last_send_kind','event')
+        with self._send_lock:
+            with self._lock:
+                self.fill_delivery_queue(now)
+                row = self.db.user_delivery(telegram_id,item.item_key)
+                user = self.db.user(telegram_id)
+                if (not row or row['status'] != 'pending' or row['available_at'] > now.timestamp()
+                        or not user or not user['is_active'] or self.stop_event.is_set()):
+                    return False
+                if float(self.db.get_flag('send_after','0')) > now.timestamp():
+                    return False
+                accepted,reason = self.filters.check(item,now=now)
+                if not accepted:
+                    self.db.finish_user_delivery(row['id'],'expired',reason)
+                    return False
+                self.db.refresh_pending(item)
+                message = self.format_message(item)
+                if not self.db.claim_user_delivery(row['id'],now):
+                    return False
+                # The durable claim is the point after which /stop cannot retract an attempt.
+                self.db.set_flag('send_after',str(max(now.timestamp(),time.time())+1.1))
+                self.db.set_flag('last_send_kind','event')
             try:
-                result = self.notifier.send(message, chat_id=telegram_id)
+                result,completed = self._transmit(message,telegram_id,version=user['subscription_version'],timestamp=now.timestamp())
             except Exception:
-                self.db.finish_user_delivery(row['id'], 'uncertain', 'unexpected_send_error')
+                with self._lock:
+                    self.db.finish_user_delivery(row['id'],'uncertain','unexpected_send_error')
                 return False
-            completed = max(now.timestamp(), time.time())
-            # Throttle every HTTP attempt, including ambiguous and rejected requests.
-            self.db.set_flag('send_after', str(completed+1.1))
-            if result.status == 'sent':
-                self.db.finish_user_delivery(row['id'], 'sent', 'delivered', message_id=result.message_id)
-                return True
-            if result.status == 'retry':
-                attempts = row['attempts']+1
-                delay = (result.retry_after if result.code == 429 else
-                         max(result.retry_after, min(3600,5*2**min(attempts,10))))
-                self.db.finish_user_delivery(row['id'], 'pending', 'telegram_retry', available_at=completed+delay)
-                if result.code == 429:
-                    self.db.set_flag('send_after', str(completed+delay))
-            else:
-                self.db.finish_user_delivery(row['id'], result.status, f'telegram_{result.code}')
-            if result.code == 403:
-                self.db.user_control(telegram_id, active=False)
-            if result.code == 401:
-                self.fatal_error = 'Telegram token rejected'
-                self.stop_event.set()
-            return False
+            with self._lock:
+                if result.status == 'sent':
+                    self.db.finish_user_delivery(row['id'],'sent','delivered',message_id=result.message_id)
+                    return True
+                if result.status == 'retry':
+                    current = self.db.user(telegram_id)
+                    if not current or not current['is_active'] or current['subscription_epoch'] != user['subscription_epoch']:
+                        self.db.finish_user_delivery(row['id'],'skipped','subscription_changed_during_send')
+                    else:
+                        attempts = row['attempts']+1
+                        delay = (result.retry_after if result.code == 429 else
+                                 max(result.retry_after,min(3600,5*2**min(attempts,10))))
+                        self.db.finish_user_delivery(row['id'],'pending','telegram_retry',available_at=completed+delay)
+                else:
+                    self.db.finish_user_delivery(row['id'],result.status,f'telegram_{result.code}')
+                return False
 
     def delivery_sources(self):
         sources = {f"tg_{c.username.lower()}":c for c in self.cfg.channels}
@@ -558,6 +572,7 @@ def handle_update(bot, upd):
                 counts = bot.db.user_delivery_counts(telegram_id)
                 reply = (f"Уведомления: {'включены' if user and user['is_active'] else 'выключены'}.\n"
                          f"Ожидают отправки: {counts.get('pending',0)}.\n"
+                         f"Отправляются: {counts.get('sending',0)}.\n"
                          f"Приостановлены из-за источников: {counts.get('suspended',0)}.\n"
                          f"Неизвестный результат: {counts.get('uncertain',0)}.\n" + HELP)
             elif command == '/help':
