@@ -156,9 +156,10 @@ def _parse_page(html: str, username: str) -> tuple[list[Item], int | None]:
 
 
 @collection_task
-def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int = 25) -> list[Item]:
+def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int = 25, include_recent: bool = False) -> list[Item]:
     """Initial snapshot: one page. Thereafter fetch all posts newer than since_id.
 
+    include_recent also returns known posts from the latest page for edit checks.
     Return only a complete result, oldest first. Any failure/limit raises without
     returning a partial batch. The caller persists its cursor after ingestion.
     """
@@ -194,7 +195,7 @@ def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int 
         previous_min = oldest
         for item in items:
             identifier = int(item.external_id)
-            if since_id is None or identifier > since_id:
+            if since_id is None or identifier > since_id or (include_recent and page == 0):
                 results.setdefault(identifier, item)
         if since_id is None or oldest <= since_id or next_before is None:
             log.info("channel %s: %d posts, %d pages", username, len(results), page + 1)

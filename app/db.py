@@ -13,7 +13,7 @@ from app.dedup import identities
 import threading
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 COMMAND_REPLY_INTERVAL = 5.0
 
 SCHEMA = """
@@ -95,9 +95,16 @@ class Database:
                     "payload": "TEXT", "delivery_state": "TEXT NOT NULL DEFAULT 'legacy'",
                     "delivery_reason": "TEXT", "available_at": "REAL NOT NULL DEFAULT 0",
                     "message_id": "INTEGER", "attempts": "INTEGER NOT NULL DEFAULT 0",
+                    "content_hash": "TEXT", "revision": "INTEGER NOT NULL DEFAULT 1",
+                    "opportunity_at": "TEXT", "content_updated_at": "TEXT",
                 }.items():
                     if name not in columns:
                         self._conn.execute(f"ALTER TABLE seen_items ADD COLUMN {name} {definition}")
+                if 'opportunity_at' not in columns:
+                    self._conn.execute('UPDATE seen_items SET opportunity_at=published_at')
+                for stored in self._conn.execute('SELECT item_key,payload FROM seen_items WHERE content_hash IS NULL AND payload IS NOT NULL'):
+                    self._conn.execute('UPDATE seen_items SET content_hash=? WHERE item_key=?',
+                                       (self.deserialize(stored['payload']).content_hash,stored['item_key']))
                 self._conn.execute("""UPDATE seen_items SET delivery_state=CASE
                     WHEN baseline=1 THEN 'baseline' WHEN notified=1 THEN 'sent'
                     ELSE 'legacy_review' END, delivery_reason='migrated'
@@ -130,6 +137,7 @@ class Database:
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_active_users ON users(is_active,subscribed_at)")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_user_queue ON user_deliveries(status,available_at,id)")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_user_status ON user_deliveries(telegram_id,status)")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_item_status ON user_deliveries(item_key,status)")
                 if "eligible_at" not in columns:
                     self._conn.execute("ALTER TABLE seen_items ADD COLUMN eligible_at REAL")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_item_eligibility ON seen_items(eligible_at)")
@@ -280,7 +288,7 @@ class Database:
                     rows.extend(self._conn.execute("""SELECT u.telegram_id,s.item_key
                         FROM seen_items s JOIN users u ON u.is_active=1 AND u.subscribed_at<=s.eligible_at
                         WHERE s.source_key=? AND s.eligible_at IS NOT NULL AND s.delivery_state='pending'
-                        AND (s.published_at IS NULL OR julianday(s.published_at)>julianday(u.subscribed_at,'unixepoch'))
+                        AND (s.opportunity_at IS NULL OR julianday(s.opportunity_at)>julianday(u.subscribed_at,'unixepoch'))
                         AND NOT EXISTS(SELECT 1 FROM user_deliveries d
                             WHERE d.telegram_id=u.telegram_id AND d.item_key=s.item_key)
                         ORDER BY s.eligible_at,s.item_key,u.telegram_id LIMIT ?""", (source,limit-len(rows))).fetchall())
@@ -357,14 +365,14 @@ class Database:
     @staticmethod
     def serialize(item):
         value = asdict(item)
-        for name in ("published_at", "deadline"):
+        for name in ("published_at", "deadline", "source_deadline"):
             value[name] = value[name].isoformat() if value[name] else None
         return json.dumps(value, ensure_ascii=False)
 
     @staticmethod
     def deserialize(payload):
         value = json.loads(payload)
-        for name in ("published_at", "deadline"):
+        for name in ("published_at", "deadline", "source_deadline"):
             if value.get(name):
                 value[name] = datetime.fromisoformat(value[name])
         return Item(**value)
@@ -398,12 +406,14 @@ class Database:
         cutoff = (now or datetime.now(timezone.utc)).timestamp() - 30 * 86400
         with self._lock:
             for alias in identities(item):
-                rows = self._conn.execute("""SELECT s.payload, s.first_seen_at FROM item_aliases a
+                rows = self._conn.execute("""SELECT s.payload, COALESCE(s.content_updated_at,s.first_seen_at) AS identity_at FROM item_aliases a
                     JOIN seen_items s ON a.item_key=s.item_key WHERE a.alias=? AND s.item_key<>?
-                    AND s.delivery_state IN ('pending','sending','sent','uncertain','baseline','legacy_review')""",
+                    AND (s.delivery_state IN ('pending','sending','sent','uncertain','baseline','legacy_review')
+                    OR EXISTS(SELECT 1 FROM user_deliveries d WHERE d.item_key=s.item_key
+                        AND d.status IN ('sending','sent','uncertain')))""",
                     (alias,item.item_key)).fetchall()
                 for row in rows:
-                    if datetime.fromisoformat(row['first_seen_at']).timestamp() < cutoff:
+                    if datetime.fromisoformat(row['identity_at']).timestamp() < cutoff:
                         continue
                     other = self.deserialize(row['payload']) if row['payload'] else None
                     if other and other.deadline and item.deadline and other.deadline != item.deadline:
@@ -411,7 +421,7 @@ class Database:
                     return True
         return False
 
-    def add_item(self, item, baseline=False, category=None, *, eligible_at=None):
+    def add_item(self, item, baseline=False, category=None, *, eligible_at=None, content_hash=None):
         state = ('baseline' if category else 'rejected') if baseline else 'pending'
         with self._lock, self._conn:
             inserted = self._conn.execute("""INSERT OR IGNORE INTO seen_items
@@ -422,12 +432,41 @@ class Database:
                 item.apply_url,category,item.title_hash,
                 item.published_at.isoformat() if item.published_at else None,self._now(),
                 int(baseline),int(baseline),self.serialize(item),state))
+            if inserted.rowcount:
+                self._conn.execute('UPDATE seen_items SET content_hash=?,opportunity_at=?,content_updated_at=? WHERE item_key=?',
+                    (content_hash or item.content_hash,item.published_at.isoformat() if item.published_at else None,self._now(),item.item_key))
             if inserted.rowcount and not baseline and category:
                 self._conn.execute("UPDATE seen_items SET eligible_at=? WHERE item_key=?",
                                    (eligible_at if eligible_at is not None else time.time(), item.item_key))
             if category:
                 for alias in identities(item):
                     self._conn.execute("INSERT OR IGNORE INTO item_aliases VALUES(?,?)",(alias,item.item_key))
+
+    def revise_item(self, item, content_hash, *, state, activate_at=None):
+        """Update content without replaying sent/uncertain/skipped deliveries."""
+        with self._lock, self._conn:
+            self._conn.execute("""UPDATE seen_items SET title=?,summary=?,url=?,apply_url=?,
+                published_at=?,title_hash=?,category=?,payload=?,content_hash=?,revision=revision+1,
+                delivery_state=?,content_updated_at=? WHERE item_key=?""", (item.title,item.summary,item.url,item.apply_url,
+                item.published_at.isoformat() if item.published_at else None,item.title_hash,
+                item.categories[0] if item.categories else None,self.serialize(item),content_hash,state,self._now(),item.item_key))
+            self._conn.execute('DELETE FROM item_aliases WHERE item_key=?',(item.item_key,))
+            delivered = self._conn.execute("SELECT 1 FROM user_deliveries WHERE item_key=? AND status IN ('sending','sent','uncertain') LIMIT 1", (item.item_key,)).fetchone()
+            if (item.categories and state != 'rejected') or delivered:
+                self._conn.executemany('INSERT OR IGNORE INTO item_aliases VALUES(?,?)',
+                                       ((alias,item.item_key) for alias in identities(item)))
+            if state in {'rejected','baseline'}:
+                self._conn.execute('UPDATE seen_items SET eligible_at=NULL WHERE item_key=?',(item.item_key,))
+            if state == 'rejected':
+                self._conn.execute("""UPDATE user_deliveries SET status='expired',reason='publication_changed'
+                    WHERE item_key=? AND status IN ('pending','suspended')""",(item.item_key,))
+            if activate_at is not None:
+                observed = datetime.fromtimestamp(activate_at,timezone.utc).isoformat()
+                self._conn.execute("""UPDATE seen_items SET eligible_at=?,opportunity_at=?,baseline=0,notified=0
+                    WHERE item_key=?""",(activate_at,observed,item.item_key))
+                self._conn.execute("""UPDATE user_deliveries SET status='suspended',reason='publication_reopened'
+                    WHERE item_key=? AND status='expired' AND telegram_id IN
+                    (SELECT telegram_id FROM users WHERE is_active=1 AND subscribed_at<=?)""",(item.item_key,activate_at))
 
     def item_row(self, item_key):
         with self._lock:

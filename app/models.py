@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -31,6 +32,18 @@ class Item:
     kind: str = "publication"  # vacancy is set by verified website collectors
     experience: str = ""
     explicitly_closed: bool = False
+    source_deadline: datetime | None = None  # structured source value, never mutated by filters
+
+    @property
+    def content_hash(self) -> str:
+        # Exclude categories, inferred deadline/status and display-only source_name:
+        # running Filters.check must not manufacture a new source revision.
+        fields = ('title','summary','raw_text','url','apply_url','published_at',
+                  'kind','experience','explicitly_closed','source_deadline')
+        data = {name:getattr(self,name) for name in fields}
+        for name in ('published_at','source_deadline'):
+            data[name] = data[name].isoformat() if data[name] else None
+        return hashlib.sha256(json.dumps(data,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
 
     @property
     def item_key(self) -> str:

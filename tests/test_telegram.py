@@ -217,7 +217,7 @@ class TelegramStateTests(unittest.TestCase):
         self.bot.set_enabled(True)
         with patch('app.main.telegram_channel.fetch_channel', return_value=[item(1), item(2)]) as fetch:
             self.bot.run_cycle()
-        fetch.assert_called_once_with('example', since_id=None, max_pages=25)
+        fetch.assert_called_once_with('example', since_id=None, max_pages=25, include_recent=True)
         self.assertEqual(self.bot.db.telegram_cursor('tg_example'), 2)
         self.assertEqual(self.bot.db.count_items(), 2)
         self.bot.notifier.send.assert_not_called()

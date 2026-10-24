@@ -215,20 +215,43 @@ class Bot:
     # ---------- обработка найденного объявления ----------
     def process_item(self, item: Item, *, baseline: bool) -> bool:
         """Возвращает True, если объявление новое, подходящее и подлежит отправке."""
-        if self.db.exists(item.item_key):
+        stored = self.db.item_row(item.item_key)
+        fingerprint = item.content_hash
+        if stored and stored['content_hash'] == fingerprint:
             return False
-        ok, reason = self.filters.check(item)  # правила применимы и к baseline — мусор не храним
+        ok, reason = self.filters.check(item)
+        if stored:
+            state = stored['delivery_state']
+            # Accepted baseline and legacy terminal states remain non-broadcastable.
+            if state not in {'pending','rejected','expired'} or not stored['content_hash']:
+                self.db.revise_item(item,fingerprint,state=state)
+                return False
+            if not ok:
+                self.db.revise_item(item,fingerprint,state='rejected')
+                return False
+            if state in {'rejected','expired'}:
+                if self.db.is_duplicate(item):
+                    self.db.revise_item(item,fingerprint,state='rejected')
+                    return False
+                # The edit time is unknown. Only users subscribed before the prior
+                # complete snapshot join a reopened event; never replay a pause archive.
+                cutoff = getattr(self,'_undated_cutoff',time.time())
+                self.db.revise_item(item,fingerprint,state='baseline' if baseline else 'pending',
+                                    activate_at=None if baseline else cutoff)
+                return not baseline
+            self.db.revise_item(item,fingerprint,state=state)
+            return False
         if not ok:
             log.debug("skip %s: %s", item.item_key, reason)
             # сохраняем как отброшенное, чтобы не проверять каждый час повторно
-            self.db.add_item(item, baseline=True, category=None)
+            self.db.add_item(item, baseline=True, category=None,content_hash=fingerprint)
             return False
         if self.db.is_duplicate(item):
             log.info("duplicate across sources: %s (%s)", item.item_key, item.title)
-            self.db.add_item(item, baseline=True, category=item.categories[0])
+            self.db.add_item(item, baseline=True, category=item.categories[0],content_hash=fingerprint)
             self.db.set_delivery(item.item_key, "skipped", "duplicate")
             return False
-        self.db.add_item(item, baseline=baseline, category=item.categories[0],
+        self.db.add_item(item, baseline=baseline, category=item.categories[0],content_hash=fingerprint,
                          eligible_at=(getattr(self, "_cycle_started", time.time()) if item.published_at
                                       else getattr(self, "_undated_cutoff", time.time())))
         return not baseline
@@ -384,9 +407,10 @@ class Bot:
                 with self._lock:
                     already_seen = self.db.exists(it.item_key)
                     baseline = initial_snapshot
-                    if self.process_item(it,baseline=baseline):
+                    became_eligible = self.process_item(it,baseline=baseline)
+                    if became_eligible:
                         new_items+=1
-                    if not already_seen and not initial_snapshot:
+                    if (not already_seen or became_eligible) and not initial_snapshot:
                         row = self.db.item_row(it.item_key)
                         if row and row['delivery_state'] in {'pending', 'baseline'}:
                             matched += 1
@@ -408,10 +432,10 @@ class Bot:
                 # through ingestion cannot turn a partial batch into a new cursor.
                 self.db.save_telegram_cursor(source_key, cursor)
                 with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
-                    items = telegram_channel.fetch_channel(ch.username, since_id=cursor, max_pages=ch.max_pages)
+                    items = telegram_channel.fetch_channel(ch.username, since_id=cursor, max_pages=ch.max_pages, include_recent=True)
                     n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None)
                     if items:
-                        self.db.save_telegram_cursor(source_key, max(int(it.external_id) for it in items))
+                        self.db.save_telegram_cursor(source_key, max(cursor or 0, max(int(it.external_id) for it in items)))
                     self.db.set_source_state(ch.key, error="")
                 self._available_sources.add(source_key)
                 successful += 1

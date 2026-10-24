@@ -90,7 +90,7 @@ class K2Collector:
                 # Preserve the former sitemap collector's slug IDs and seen rows.
                 external_id=path.rsplit('/', 1)[-1], url=url, title=text(product['title']),
                 summary=full_text[:500], raw_text=full_text, apply_url=apply_url,
-                published_at=published, deadline=deadline, registration_status='unknown',
+                published_at=published, deadline=deadline, source_deadline=deadline, registration_status='unknown',
                 kind='vacancy',
             ))
         check_collection()
