@@ -23,7 +23,7 @@ class StreamingTests(unittest.TestCase):
 
     def download(self, response, limit=10, post=False):
         method = 'post' if post else 'get'
-        with patch('app.collectors.base._pace'), patch('app.collectors.base.requests.'+method, return_value=response) as send:
+        with patch('app.collectors.base._pace'), patch('app.collectors.base._request', return_value=response) as send:
             result = http_post_json('https://example.test', {}, max_bytes=limit) if post else http_get('https://example.test', max_bytes=limit)
         self.assertTrue(send.call_args.kwargs['stream'])
         response.close.assert_called_once()
@@ -130,14 +130,14 @@ class StreamingTests(unittest.TestCase):
     def test_size_failure_is_a_safe_website_error(self):
         from app.collectors.website_http import read_text, WebsiteSourceError
         response = self.reply([], {'Content-Length': '12000001'})
-        with patch('app.collectors.base._pace'), patch('app.collectors.base.requests.get', return_value=response):
+        with patch('app.collectors.base._pace'), patch('app.collectors.base._request', return_value=response):
             with self.assertRaises(WebsiteSourceError): read_text('https://example.test')
         response.close.assert_called_once()
 
     def test_size_failure_is_a_safe_telegram_snapshot_error(self):
         from app.collectors.telegram_channel import fetch_channel, TelegramSourceError
         response = self.reply([], {'Content-Length': '8000001'})
-        with patch('app.collectors.base._pace'), patch('app.collectors.base.requests.get', return_value=response):
+        with patch('app.collectors.base._pace'), patch('app.collectors.base._request', return_value=response):
             with self.assertRaises(TelegramSourceError): fetch_channel('example')
         response.close.assert_called_once()
 
@@ -149,3 +149,32 @@ class StreamingTests(unittest.TestCase):
         response.encoding = 'utf-8'
         response.raw = HTTPResponse(body=BytesIO(gzip.compress(data)), preload_content=False)
         self.assertEqual(self.download(response,100).text, 'Привет')
+
+
+class RedirectTransportTests(unittest.TestCase):
+    def test_real_session_never_reads_redirect_bodies_or_follows_location(self):
+        import io
+        from app.collectors.base import http_post_json
+        for status in (301,302,303,307,308):
+            for method in ('GET','POST'):
+                raw = io.BytesIO(b'x'*1_048_576)
+                raw.read = Mock(wraps=raw.read)
+                reply = requests.Response()
+                reply.status_code = status
+                reply.headers.update({'Location':'https://example.test/next','Content-Length':'1048576'})
+                reply.raw = raw
+                class Adapter(requests.adapters.BaseAdapter):
+                    def send(self, request, **kwargs):
+                        reply.request = request
+                        reply.url = request.url
+                        return reply
+                    def close(self): pass
+                adapter = Adapter()
+                with self.subTest(status=status, method=method), patch('app.collectors.base._pace'), patch.object(adapter,'send',wraps=adapter.send) as send, patch('requests.sessions.Session.get_adapter',return_value=adapter):
+                    result = (http_get('https://example.test',max_bytes=16) if method=='GET'
+                              else http_post_json('https://example.test',{},max_bytes=16))
+                self.assertEqual(result.status_code,status)
+                self.assertIsNone(result.next)
+                send.assert_called_once()
+                raw.read.assert_not_called()
+                self.assertTrue(raw.closed)

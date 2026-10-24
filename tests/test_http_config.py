@@ -30,7 +30,7 @@ class HttpConfigTests(unittest.TestCase):
             bot = Bot(cfg)
             self.addCleanup(bot.db.close)
             for method in ('get', 'post'):
-                with patch('app.collectors.base._pace'), patch('app.collectors.base.requests.'+method, return_value=self.response()) as send:
+                with patch('app.collectors.base._pace'), patch('app.collectors.base._request', return_value=self.response()) as send:
                     def collect():
                         if method == 'get': http_get('https://example.test')
                         else: http_post_json('https://example.test', {})
@@ -40,14 +40,14 @@ class HttpConfigTests(unittest.TestCase):
                 self.assertEqual(send.call_args.kwargs['headers']['User-Agent'], 'Radar-Test/9')
 
     def test_nested_collector_inherits_settings_and_budget(self):
-        with patch('app.collectors.base._pace'), patch('app.collectors.base.requests.get', return_value=self.response()) as send:
+        with patch('app.collectors.base._pace'), patch('app.collectors.base._request', return_value=self.response()) as send:
             with collection_scope(budget=10, request_timeout=70, user_agent='Outer/1'):
                 with collection_scope(): http_get('https://example.test')
             self.assertLessEqual(send.call_args.kwargs['timeout'],5)
             self.assertEqual(send.call_args.kwargs['headers']['User-Agent'],'Outer/1')
 
     def test_explicit_request_timeout_is_supported(self):
-        with patch('app.collectors.base._pace'), patch('app.collectors.base.requests.get', return_value=self.response()) as send:
+        with patch('app.collectors.base._pace'), patch('app.collectors.base._request', return_value=self.response()) as send:
             with collection_scope(request_timeout=7): http_get('https://example.test',timeout=2)
         self.assertEqual(send.call_args.kwargs['timeout'],2)
 
@@ -56,7 +56,7 @@ class HttpConfigTests(unittest.TestCase):
         with self.assertRaises(RuntimeError), collection_scope(request_timeout=3,user_agent='Temporary/1'):
             raise RuntimeError('test')
         self.assertEqual(_http_settings.get(),before)
-        with patch('app.collectors.base._pace'), patch('app.collectors.base.requests.get', return_value=self.response()) as send:
+        with patch('app.collectors.base._pace'), patch('app.collectors.base._request', return_value=self.response()) as send:
             http_get('https://example.test')
         self.assertEqual(send.call_args.kwargs['timeout'], DEFAULT_REQUEST_TIMEOUT)
         self.assertEqual(send.call_args.kwargs['headers']['User-Agent'], DEFAULT_USER_AGENT)
@@ -102,7 +102,7 @@ class HttpConfigTests(unittest.TestCase):
             def fetch(*args,**kwargs):
                 http_get('https://example.test')
                 return []
-            with patch('app.main.telegram_channel.fetch_channel',side_effect=fetch), patch('app.collectors.base._pace'), patch('app.collectors.base.requests.get',return_value=self.response()) as send:
+            with patch('app.main.telegram_channel.fetch_channel',side_effect=fetch), patch('app.collectors.base._pace'), patch('app.collectors.base._request',return_value=self.response()) as send:
                 bot.run_cycle()
             send.assert_called_once()
             self.assertEqual(send.call_args.kwargs['timeout'],9)

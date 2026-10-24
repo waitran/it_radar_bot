@@ -159,6 +159,18 @@ def _read_response(response, max_bytes):
         response.close()
 
 
+class SourceSession(requests.Session):
+    def get_redirect_target(self, response):
+        # Session.send prepares Response.next even with allow_redirects=False;
+        # the default redirect generator consumes response.content first.
+        return None
+
+
+def _request(method, url, **kwargs):
+    with SourceSession() as session:
+        return session.request(method, url, **kwargs)
+
+
 def http_get(url: str, *, timeout: int | None = None, headers: dict | None = None,
              allow_redirects: bool = False, max_bytes: int = 12_000_000) -> requests.Response:
     global _last_request_at
@@ -170,7 +182,7 @@ def http_get(url: str, *, timeout: int | None = None, headers: dict | None = Non
     if headers:
         h.update(headers)
     try:
-        response = requests.get(url, timeout=timeout, headers=h,
+        response = _request("GET", url, timeout=timeout, headers=h,
                                 allow_redirects=allow_redirects, stream=True)
         return _read_response(response, max_bytes)
     finally:
@@ -185,7 +197,7 @@ def http_post_json(url: str, payload: dict, *, timeout: int | None = None,
     configured_timeout, user_agent = _http_settings.get()
     timeout = min(configured_timeout if timeout is None else timeout,check_collection()/2)
     try:
-        response = requests.post(url, json=payload, timeout=timeout, stream=True,
+        response = _request("POST", url, json=payload, timeout=timeout, stream=True,
                                  headers={"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"},
                                  allow_redirects=False)
         return _read_response(response, max_bytes)

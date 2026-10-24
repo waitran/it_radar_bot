@@ -24,7 +24,7 @@ from tests.test_websites import croc_source, k2_source, fixture, catalog
 class CollectionControlTests(unittest.TestCase):
     def test_pre_cancelled_get_and_post_make_no_request(self):
         stop = threading.Event(); stop.set()
-        with patch('app.collectors.base.requests.get') as get, patch('app.collectors.base.requests.post') as post:
+        with patch('app.collectors.base._request') as get, patch('app.collectors.base._request') as post:
             for request in (lambda:http_get('https://example.test'),lambda:http_post_json('https://example.test',{})):
                 with self.assertRaises(CollectionCancelled), collection_scope(stop): request()
             get.assert_not_called(); post.assert_not_called()
@@ -34,7 +34,7 @@ class CollectionControlTests(unittest.TestCase):
         with patch('app.collectors.base._last_request_at',time.monotonic()), \
              patch.object(stop,'wait',side_effect=lambda seconds:stop.set()) as wait, \
              patch('app.collectors.base.time.sleep') as sleep, \
-             patch('app.collectors.base.requests.get') as get:
+             patch('app.collectors.base._request') as get:
             with self.assertRaises(CollectionCancelled), collection_scope(stop):
                 http_get('https://example.test')
             wait.assert_called_once(); sleep.assert_not_called(); get.assert_not_called()
@@ -42,7 +42,7 @@ class CollectionControlTests(unittest.TestCase):
     def test_deadline_is_shared_by_nested_scopes_and_prevents_next_request(self):
         clock = [1000.0]
         with patch('app.collectors.base.time.monotonic',side_effect=lambda:clock[0]), \
-             patch('app.collectors.base.requests.get') as get:
+             patch('app.collectors.base._request') as get:
             with self.assertRaises(CollectionTimeout):
                 with collection_scope(budget=5):
                     with collection_scope(budget=500):
@@ -54,7 +54,7 @@ class CollectionControlTests(unittest.TestCase):
 
     def test_inflight_request_timeout_uses_remaining_budget(self):
         with patch('app.collectors.base._last_request_at',0), \
-             patch('app.collectors.base.requests.get',return_value=Mock(status_code=200, headers={}, raw=Mock(stream=Mock(return_value=iter(()))))) as get:
+             patch('app.collectors.base._request',return_value=Mock(status_code=200, headers={}, raw=Mock(stream=Mock(return_value=iter(()))))) as get:
             with collection_scope(budget=8): http_get('https://example.test')
             self.assertGreater(get.call_args.kwargs['timeout'],0)
             self.assertLessEqual(get.call_args.kwargs['timeout'],4)
@@ -63,7 +63,7 @@ class CollectionControlTests(unittest.TestCase):
         stop = threading.Event(); reply = Mock()
         def send(*args,**kwargs): stop.set(); return reply
         with patch('app.collectors.base._last_request_at',0), \
-             patch('app.collectors.base.requests.get',side_effect=send):
+             patch('app.collectors.base._request',side_effect=send):
             with self.assertRaises(CollectionCancelled), collection_scope(stop): http_get('https://example.test')
         reply.close.assert_called_once(); reply.raise_for_status.assert_not_called()
 
