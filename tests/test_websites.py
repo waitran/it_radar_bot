@@ -324,7 +324,7 @@ class WebsiteIntegrationTests(unittest.TestCase):
         self.assertTrue(self.bot.db.exists(old.item_key))
         self.assertEqual(self.bot.db.user_pending(datetime.now(timezone.utc)),[])
         self.assertEqual(self.bot.db.item_row(old.item_key)['delivery_state'],'pending')
-        self.assertEqual(self.bot.db.user_delivery(123,old.item_key)['status'],'skipped')
+        self.assertIsNone(self.bot.db.user_delivery(123,old.item_key))
 
 
 if __name__ == '__main__':

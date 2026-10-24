@@ -234,7 +234,7 @@ class Bot:
         now = now or datetime.now(timezone.utc)
         telegram_id = self.cfg.owner_id if telegram_id is None else telegram_id
         with self._lock:
-            self.db.fill_user_queue()
+            self.fill_delivery_queue(now)
             row = self.db.user_delivery(telegram_id, item.item_key)
             user = self.db.user(telegram_id)
             if (not row or row['status'] != 'pending' or row['available_at'] > now.timestamp()
@@ -278,12 +278,23 @@ class Bot:
                 self.stop_event.set()
             return False
 
+    def delivery_sources(self):
+        sources = {f"tg_{c.username.lower()}":c for c in self.cfg.channels}
+        sources.update({w.key:w for w in self.cfg.websites
+                        if w.type in WEBSITE_COLLECTORS and w.type != "rtkit_careers"})
+        return sources
+
+    def fill_delivery_queue(self, now):
+        configured = self.delivery_sources()
+        ready = (self._available_sources & configured.keys()
+                 if now.timestamp()-self._last_scan <= 2*self.cfg.poll_interval_seconds else set())
+        self.db.fill_user_queue(available_sources=ready, configured_sources=configured)
+
     def drain_pending(self, *, now=None):
-        now=now or datetime.now(timezone.utc)
-        sources={f"tg_{c.username.lower()}":c for c in self.cfg.channels}
-        sources.update({w.key:w for w in self.cfg.websites if w.type in WEBSITE_COLLECTORS and w.type!="rtkit_careers"})
-        sent=0
-        self.db.fill_user_queue()
+        now = now or datetime.now(timezone.utc)
+        sources = self.delivery_sources()
+        sent = 0
+        self.fill_delivery_queue(now)
         rows = self.db.user_pending(now, after_id=getattr(self, '_delivery_cursor', 0))
         if not rows:
             self._delivery_cursor = 0
@@ -471,6 +482,7 @@ def handle_update(bot, upd):
                 counts = bot.db.user_delivery_counts(telegram_id)
                 reply = (f"Уведомления: {'включены' if user and user['is_active'] else 'выключены'}.\n"
                          f"Ожидают отправки: {counts.get('pending',0)}.\n"
+                         f"Приостановлены из-за источников: {counts.get('suspended',0)}.\n"
                          f"Неизвестный результат: {counts.get('uncertain',0)}.\n" + HELP)
             elif command == '/help':
                 reply = 'IT Radar присылает новые подходящие IT-возможности.\n' + HELP
