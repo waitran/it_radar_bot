@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 from datetime import datetime, timezone, timedelta
 import requests, yaml
 from app.collectors.base import http_get
-from app.config import Config, TelegramChannelSource
+from app.config import Config, TelegramChannelSource, ConfigurationError
 from app.main import Bot, handle_update
 from app.models import Item
 from app.notify import DeliveryResult
@@ -75,15 +75,21 @@ with tempfile.TemporaryDirectory() as directory,patch.dict(os.environ,{},clear=T
     raw=yaml.safe_load((ROOT/'config.yaml').read_text())
     raw['rules']['categories']['internships']['label']=['invalid']
     path=Path(directory)/'config.yaml';path.write_text(yaml.safe_dump(raw,allow_unicode=True))
-    cfg=Config.load(str(path));cfg.bot_token='123456789:'+'synthetic_value_'*2;cfg.validate_runtime()
-    entry=Item('tg_example','Example','1','https://t.me/example/1','Стажировка Python','Открыт набор для студентов без опыта',None,datetime.now(timezone.utc),raw_text='Открыт набор для студентов без опыта')
-    checked = subprocess.run([sys.executable, '-m', 'app.main', '--check-config'],
-        cwd=ROOT, env={'TELEGRAM_BOT_TOKEN':cfg.bot_token, 'CONFIG_PATH':str(path)},
-        capture_output=True, text=True, timeout=10)
-    accepted=Filters(cfg.rules).check(entry)[0]
-    try:format_message(entry,cfg.rules); error=None
-    except Exception as exc:error=type(exc).__name__
-    results['invalid_label_accepted']={'config_passes':True,'check_config_exit_code':checked.returncode,'item_accepted':accepted,'format_error':error}
+    try:
+        cfg=Config.load(str(path))
+    except ConfigurationError:
+        results['invalid_label_accepted']={'config_passes':False}
+    else:
+        cfg=Config.load(str(path));cfg.bot_token='123456789:'+'synthetic_value_'*2;cfg.validate_runtime()
+        entry=Item('tg_example','Example','1','https://t.me/example/1','Стажировка Python','Открыт набор для студентов без опыта',None,datetime.now(timezone.utc),raw_text='Открыт набор для студентов без опыта')
+        checked = subprocess.run([sys.executable, '-m', 'app.main', '--check-config'],
+            cwd=ROOT, env={'TELEGRAM_BOT_TOKEN':cfg.bot_token, 'CONFIG_PATH':str(path)},
+            capture_output=True, text=True, timeout=10)
+        accepted=Filters(cfg.rules).check(entry)[0]
+        try:format_message(entry,cfg.rules); error=None
+        except Exception as exc:error=type(exc).__name__
+        results['invalid_label_accepted']={'config_passes':True,'check_config_exit_code':checked.returncode,'item_accepted':accepted,'format_error':error}
+
 # A markup change can preserve post parsing while hiding the pagination link.
 from app.collectors.telegram_channel import fetch_channel, TelegramSourceError
 html = ''.join(

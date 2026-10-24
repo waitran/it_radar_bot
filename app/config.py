@@ -146,8 +146,11 @@ class Config:
                 raise ConfigurationError("Неизвестная категория или неверная структура rules.categories.")
             if not isinstance(cat.get("keywords", []), list) or not all(isinstance(x, str) and x.strip() for x in cat.get("keywords", [])):
                 raise ConfigurationError("Ключевые слова категории должны быть списком непустых строк.")
+            label = cat.get("label", cat_key)
+            if not isinstance(label,str) or not label.strip():
+                raise ConfigurationError(f"rules.categories.{cat_key}.label должен быть непустой строкой.")
             categories[_norm(cat_key)] = {
-                "label": cat.get("label", cat_key),
+                "label": label,
                 "keywords": [_norm(k) for k in cat.get("keywords", [])],
             }
         rules = Rules(
