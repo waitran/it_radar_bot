@@ -52,10 +52,12 @@ class VerificationFreshnessTests(unittest.TestCase):
             self.bot.drain_pending(now=self.now)
             self.bot.drain_pending(now=self.now+timedelta(seconds=2))
             self.assertEqual(fetch.call_count,1)
-            self.bot.drain_pending(now=self.now+timedelta(seconds=61))
-            self.assertEqual(fetch.call_count,2)
+            self.bot._enqueue_verification_retries(self.now.timestamp()+61)
+            job,key,source=self.bot._verification_queue.get_nowait()
+            self.assertEqual(key,self.entry.item_key)
+            self.assertEqual(fetch.call_count,1)
         self.bot.notifier.send.assert_not_called()
-        self.assertEqual(self.bot.db.multi_delivery_counts(),{'pending':2})
+        self.assertEqual(self.bot.db.multi_delivery_counts(),{'suspended':2})
 
     def test_website_catalogue_is_rechecked_when_cache_is_stale(self):
         cfg=self.bot.cfg
@@ -104,3 +106,22 @@ class VerificationFreshnessTests(unittest.TestCase):
         for value in ('0','-1','invalid'):
             with patch.dict(os.environ,{'ITEM_VERIFICATION_TTL_SECONDS':value}),self.assertRaises(ValueError):
                 Config.load(str(ROOT/'config.yaml'))
+
+    def test_failed_checks_free_capacity_for_healthy_source_and_recover_without_duplicates(self):
+        with patch('app.main.telegram_channel.fetch_post',side_effect=WebsiteSourceError('offline')):
+            self.bot.drain_pending(now=self.now)
+        healthy=item('2','tg_good');healthy.published_at=self.entry.published_at
+        self.bot.db.add_item(healthy,category='internships')
+        self.bot.db.fill_user_queue(capacity=2,available_sources={'tg_example','tg_good'},blocked_items=self.bot._unverified_items)
+        self.assertEqual(self.bot.db.multi_delivery_counts(),{'pending':2,'suspended':2})
+        for uid in (101,202):
+            row=self.bot.db.user_delivery(uid,healthy.item_key)
+            self.assertIsNotNone(row)
+            self.bot.db.finish_user_delivery(row['id'],'sent','test',message_id=77)
+        self.bot._enqueue_verification_retries(self.now.timestamp()+61)
+        job,key,source=self.bot._verification_queue.get_nowait()
+        with patch('app.main.telegram_channel.fetch_post',return_value=copy.deepcopy(self.entry)):
+            self.assertTrue(self.bot._verify_item(key,source,self.now.timestamp()+61))
+        self.bot.db.fill_user_queue(capacity=2,available_sources={'tg_example','tg_good'},blocked_items=self.bot._unverified_items)
+        self.assertEqual(self.bot.db.multi_delivery_counts(),{'pending':2,'sent':2})
+        for uid in (101,202):self.assertEqual(self.bot.db.user_delivery(uid,healthy.item_key)['telegram_message_id'],77)

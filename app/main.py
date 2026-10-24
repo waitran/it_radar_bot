@@ -72,6 +72,7 @@ class Bot:
         self._cache_generation = 0
         self._verification_queue = queue.Queue(maxsize=128)
         self._verification_jobs = set()
+        self._verification_retries = {}
         self._website_verified_at = {}
         self._website_failed = {}
         self._source_verify_after = {}
@@ -244,6 +245,28 @@ class Bot:
         with source_lock, self._collection_scope():
             yield
 
+    def _defer_verification(self, key, source, timestamp):
+        with self._lock:
+            self._unverified_items.add(key)
+            self._verify_after[key] = timestamp+60
+            if key in self._verification_retries or len(self._verification_retries) < 128:
+                self._verification_retries[key] = (timestamp+60,source)
+
+    def _enqueue_verification_retries(self, timestamp):
+        with self._lock:
+            for key,(deadline,source) in list(self._verification_retries.items()):
+                if deadline > timestamp:
+                    continue
+                job = ('post',key) if source.type == 'telegram_channel' else ('site',source.key)
+                if job in self._verification_jobs:
+                    continue
+                try:
+                    self._verification_queue.put_nowait((job,key,source))
+                except queue.Full:
+                    break
+                self._verification_jobs.add(job)
+                self._verification_retries.pop(key,None)
+
     def _verify_item(self, key, source, now):
         source_key = f'tg_{source.username.lower()}' if source.type == 'telegram_channel' else source.key
         with self._source_scope(source_key):
@@ -266,7 +289,7 @@ class Bot:
                     self._website_verified_at[source.key] = timestamp
                     self._website_failed[source.key] = failed
                     for failed_key in failed:
-                        self._verify_after[failed_key] = timestamp+60
+                        self._defer_verification(failed_key,source,timestamp)
                 self._source_verify_after.pop(source.key,None)
                 for entry in entries:
                     if self.db.exists(entry.item_key):
@@ -277,18 +300,22 @@ class Bot:
                     self._verified_at[entry.item_key] = timestamp
                     self._missing_items.discard(entry.item_key)
                     self._unverified_items.discard(entry.item_key)
+                    self._verification_retries.pop(entry.item_key,None)
                 if key in failed:
-                    self._verify_after[key] = timestamp+60
+                    self._defer_verification(key,source,timestamp)
                     return False
                 if key not in catalog:
                     self._fresh_items.pop(key,None)
                     self._verified_at[key] = timestamp
                     self._missing_items.add(key)
+                    self._unverified_items.discard(key)
+                    self._verification_retries.pop(key,None)
                 self._verify_after.pop(key,None)
                 return True
 
     def _verification_loop(self, stop):
         while not stop.is_set():
+            self._enqueue_verification_retries(time.time())
             try:
                 job,key,source = self._verification_queue.get(timeout=0.2)
             except queue.Empty:
@@ -299,7 +326,7 @@ class Bot:
                 return
             except Exception as exc:
                 with self._lock:
-                    self._verify_after[key] = time.time()+60
+                    self._defer_verification(key,source,time.time())
                     if source.type != 'telegram_channel':
                         self._source_verify_after[source.key] = time.time()+60
                 log.warning('Проверка публикации источника %s отложена (%s)',source.key,type(exc).__name__)
@@ -337,7 +364,7 @@ class Bot:
             return False,None
         except Exception as exc:
             with self._lock:
-                self._verify_after[key] = timestamp+60
+                self._defer_verification(key,source,timestamp)
                 if source.type != 'telegram_channel':
                     self._source_verify_after[source.key] = timestamp+60
             log.warning('Проверка публикации источника %s отложена (%s)',source.key,type(exc).__name__)
@@ -538,6 +565,7 @@ class Bot:
             self._verified_at = {}
             self._missing_items = set()
             self._verify_after = {}
+            self._verification_retries = {}
             self._website_verified_at = {}
             self._website_failed = {}
             self._source_verify_after = {}
