@@ -7,6 +7,7 @@ from contextvars import ContextVar
 from functools import wraps
 import time
 import zlib
+import threading
 
 import requests
 from urllib3.exceptions import HTTPError as UrllibHTTPError
@@ -18,6 +19,7 @@ log = logging.getLogger("collectors")
 # Между запросами к любому источнику выдерживаем паузу — соблюдаем разумную частоту.
 _MIN_INTERVAL = 2.0
 _last_request_at = 0.0
+_pacing_lock = threading.Lock()
 
 
 class CollectionCancelled(RuntimeError):
@@ -76,6 +78,13 @@ def collection_task(function):
 
 
 def _pace():
+    global _last_request_at
+    with _pacing_lock:
+        _wait_for_slot()
+        _last_request_at = time.monotonic()
+
+
+def _wait_for_slot():
     remaining = check_collection()
     wait = max(0,_MIN_INTERVAL-(time.monotonic()-_last_request_at))
     control = _control.get()

@@ -77,6 +77,7 @@ class Config:
     websites: list[HttpSource]
     rules: Rules
     source_timeout_seconds: int = 600
+    item_verification_ttl_seconds: int = 300
 
     def validate_runtime(self) -> None:
         """Validate startup credentials without contacting Telegram or echoing values."""
@@ -176,4 +177,5 @@ class Config:
             websites=websites,
             rules=rules,
             source_timeout_seconds=Config._env_int("SOURCE_TIMEOUT_SECONDS", "600"),
+            item_verification_ttl_seconds=Config._env_int("ITEM_VERIFICATION_TTL_SECONDS", "300"),
         )

@@ -11,6 +11,8 @@ import argparse
 import json
 import logging
 import math
+import queue
+from contextlib import contextmanager
 import signal
 import threading
 import time
@@ -63,6 +65,16 @@ class Bot:
         self._last_scan = 0.0
         self._background_collection = False
         self._sent_total = 0
+        self._verified_at = {}
+        self._missing_items = set()
+        self._verify_after = {}
+        self._cache_generation = 0
+        self._verification_queue = queue.Queue(maxsize=128)
+        self._verification_jobs = set()
+        self._website_verified_at = {}
+        self._website_failed = {}
+        self._source_verify_after = {}
+        self._source_locks = {}
         try:
             self.db.migrate_owner(cfg.owner_id)
         except Exception:
@@ -223,10 +235,118 @@ class Bot:
                                 request_timeout=self.cfg.request_timeout_seconds,
                                 user_agent=self.cfg.user_agent)
 
+    @contextmanager
+    def _source_scope(self, key):
+        with self._lock:
+            source_lock = self._source_locks.setdefault(key,threading.RLock())
+        with source_lock, self._collection_scope():
+            yield
+
+    def _verify_item(self, key, source, now):
+        source_key = f'tg_{source.username.lower()}' if source.type == 'telegram_channel' else source.key
+        with self._source_scope(source_key):
+            with self._lock:
+                generation = self._cache_generation
+            if source.type == 'telegram_channel':
+                entry = telegram_channel.fetch_post(source.username,int(key.rsplit(':',1)[1]))
+                entries = [entry] if entry else []
+                catalog,failed = {entry.item_key for entry in entries},set()
+            else:
+                snapshot = WEBSITE_COLLECTORS[source.type](source).fetch()
+                entries = list(snapshot)
+                catalog = set(snapshot.catalog) if isinstance(snapshot,WebsiteSnapshot) else {entry.item_key for entry in entries}
+                failed = set(snapshot.failed_details) if isinstance(snapshot,WebsiteSnapshot) else set()
+            with self._lock:
+                if generation != self._cache_generation:
+                    return False
+                timestamp = max(now,time.time())
+                if source.type != 'telegram_channel':
+                    self._website_verified_at[source.key] = timestamp
+                    self._website_failed[source.key] = failed
+                    for failed_key in failed:
+                        self._verify_after[failed_key] = timestamp+60
+                self._source_verify_after.pop(source.key,None)
+                for entry in entries:
+                    if self.db.exists(entry.item_key):
+                        stored = self.db.item_row(entry.item_key)
+                        self.process_item(entry,baseline=stored['delivery_state']=='baseline',
+                                          cutoff=float(self.db.get_flag('source_snapshot:'+source.key,'0')))
+                    self._fresh_items[entry.item_key] = entry
+                    self._verified_at[entry.item_key] = timestamp
+                    self._missing_items.discard(entry.item_key)
+                    self._unverified_items.discard(entry.item_key)
+                if key in failed:
+                    self._verify_after[key] = timestamp+60
+                    return False
+                if key not in catalog:
+                    self._fresh_items.pop(key,None)
+                    self._verified_at[key] = timestamp
+                    self._missing_items.add(key)
+                self._verify_after.pop(key,None)
+                return True
+
+    def _verification_loop(self, stop):
+        while not stop.is_set():
+            try:
+                job,key,source = self._verification_queue.get(timeout=0.2)
+            except queue.Empty:
+                continue
+            try:
+                self._verify_item(key,source,time.time())
+            except CollectionCancelled:
+                return
+            except Exception as exc:
+                with self._lock:
+                    self._verify_after[key] = time.time()+60
+                    if source.type != 'telegram_channel':
+                        self._source_verify_after[source.key] = time.time()+60
+                log.warning('Проверка публикации источника %s отложена (%s)',source.key,type(exc).__name__)
+            finally:
+                with self._lock:
+                    self._verification_jobs.discard(job)
+                self._verification_queue.task_done()
+
+    def _current_for_delivery(self, key, source, now):
+        timestamp = now.timestamp()
+        with self._lock:
+            current = self._fresh_items.get(key)
+            age = timestamp-self._verified_at.get(key,self._website_verified_at.get(source.key,self._last_scan))
+            detail_failed = key in self._website_failed.get(source.key,set())
+            if age < self.cfg.item_verification_ttl_seconds and not detail_failed:
+                if current is not None or key in self._missing_items:
+                    return True,current
+                if source.type != 'telegram_channel':
+                    return True,None  # absent from the recent complete website catalogue
+            if timestamp < max(self._verify_after.get(key,0),self._source_verify_after.get(source.key,0)):
+                return False,None
+            if self._background_collection:
+                job = ('post',key) if source.type == 'telegram_channel' else ('site',source.key)
+                if job not in self._verification_jobs:
+                    try:
+                        self._verification_queue.put_nowait((job,key,source))
+                    except queue.Full:
+                        return False,None
+                    self._verification_jobs.add(job)
+                return False,None
+        try:
+            if not self._verify_item(key,source,timestamp):
+                return False,None
+        except CollectionCancelled:
+            return False,None
+        except Exception as exc:
+            with self._lock:
+                self._verify_after[key] = timestamp+60
+                if source.type != 'telegram_channel':
+                    self._source_verify_after[source.key] = timestamp+60
+            log.warning('Проверка публикации источника %s отложена (%s)',source.key,type(exc).__name__)
+            return False,None
+        with self._lock:
+            return True,self._fresh_items.get(key)
+
     # ---------- сбор одного источника ----------
     def collect_source(self, key: str, name: str, fetch) -> list[Item] | None:
         try:
-            with self._collection_scope():
+            with self._source_scope(key):
                 items = fetch()
                 check_collection()
             self.db.set_source_state(key, error=items.error_summary if isinstance(items,WebsiteSnapshot) else '')
@@ -239,7 +359,7 @@ class Bot:
             return None
 
     # ---------- обработка найденного объявления ----------
-    def process_item(self, item: Item, *, baseline: bool) -> bool:
+    def process_item(self, item: Item, *, baseline: bool, cutoff=None) -> bool:
         """Возвращает True, если объявление новое, подходящее и подлежит отправке."""
         stored = self.db.item_row(item.item_key)
         fingerprint = item.content_hash
@@ -266,7 +386,7 @@ class Bot:
                     return False
                 # The edit time is unknown. Only users subscribed before the prior
                 # complete snapshot join a reopened event; never replay a pause archive.
-                cutoff = getattr(self,'_undated_cutoff',time.time())
+                cutoff = getattr(self,'_undated_cutoff',time.time()) if cutoff is None else cutoff
                 self.db.revise_item(item,fingerprint,state='baseline' if baseline else 'pending',
                                     activate_at=None if baseline else cutoff)
                 return not baseline
@@ -373,20 +493,9 @@ class Bot:
                 continue
             if row["source_key"] not in self._available_sources or now.timestamp()-self._last_scan > 2*self.cfg.poll_interval_seconds:
                 continue
-            current=self._fresh_items.get(row["item_key"])
-            source=sources[row["source_key"]]
-            if current is None and source.type=="telegram_channel":
-                try:
-                    with self._collection_scope():
-                        current=telegram_channel.fetch_post(source.username,int(row["external_id"]))
-                except CollectionCancelled:
-                    return sent
-                except Exception:
-                    self.db.set_source_state(source.key,error="Не удалось повторно прочитать публикацию Telegram")
-                    self._available_sources.discard(row["source_key"])
-                    continue
-                if current:
-                    self._fresh_items[current.item_key]=current
+            ready,current = self._current_for_delivery(row['item_key'],sources[row['source_key']],now)
+            if not ready:
+                continue
             if current is None:
                 self.db.finish_user_delivery(row["delivery_id"],"expired","publication_no_longer_present")
                 continue
@@ -420,10 +529,18 @@ class Bot:
         errors: list[str] = []
         checked_keys = []
         successful = matched = 0
-        self._unverified_items = set()
-        self._fresh_items = {}
-        self._available_sources = set()
-        self._last_scan = time.time()
+        with self._lock:
+            self._cache_generation += 1
+            self._unverified_items = set()
+            self._fresh_items = {}
+            self._verified_at = {}
+            self._missing_items = set()
+            self._verify_after = {}
+            self._website_verified_at = {}
+            self._website_failed = {}
+            self._source_verify_after = {}
+            self._available_sources = set()
+            self._last_scan = time.time()
         self._cycle_started = started.timestamp()
 
         def handle_source(key: str, items: list[Item], *, initial_snapshot: bool = False, known_cursor=None) -> tuple[int, int]:
@@ -439,8 +556,9 @@ class Bot:
                     baseline=initial_snapshot,eligible_at=self._undated_cutoff)
             for it in items:
                 check_collection()
-                self._fresh_items[it.item_key]=it
                 with self._lock:
+                    self._fresh_items[it.item_key]=it
+                    self._verified_at[it.item_key]=time.time()
                     already_seen = self.db.exists(it.item_key)
                     baseline = initial_snapshot or (known_cursor is not None and not already_seen
                                                     and int(it.external_id) <= known_cursor)
@@ -468,7 +586,7 @@ class Bot:
                 # Persist the legacy boundary before processing, so a crash partway
                 # through ingestion cannot turn a partial batch into a new cursor.
                 self.db.save_telegram_cursor(source_key, cursor)
-                with self._collection_scope():
+                with self._source_scope(source_key):
                     items = telegram_channel.fetch_channel(ch.username, since_id=cursor, max_pages=ch.max_pages, include_recent=True)
                     n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None, known_cursor=cursor)
                     if items:
@@ -495,7 +613,7 @@ class Bot:
                 continue
             collector = cls(w)
             try:
-                with self._collection_scope():
+                with self._source_scope(w.key):
                     items = self.collect_source(w.key, w.name, collector.fetch)
                     if items is None:
                         continue
@@ -546,7 +664,9 @@ class Bot:
         # the durable outboxes while a source is waiting on network I/O.
         self._background_collection = True
         scanner = threading.Thread(target=self._scan_loop,args=(stop,),daemon=True,name='collector')
+        verifier = threading.Thread(target=self._verification_loop,args=(stop,),daemon=True,name='verifier')
         scanner.start()
+        verifier.start()
         try:
             while not stop.is_set():
                 try:
@@ -557,6 +677,7 @@ class Bot:
         finally:
             stop.set()
             scanner.join()
+            verifier.join()
             self._background_collection = False
 
 
