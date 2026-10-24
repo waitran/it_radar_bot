@@ -74,7 +74,7 @@ class Config:
         """Validate startup credentials without contacting Telegram or echoing values."""
         if not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", self.bot_token):
             raise ConfigurationError("Задайте корректный TELEGRAM_BOT_TOKEN в окружении.")
-        if self.owner_id <= 0:
+        if self.owner_id < 0:
             raise ConfigurationError("OWNER_TELEGRAM_ID должен быть положительным числовым ID владельца.")
         if not self.db_path.strip():
             raise ConfigurationError("DB_PATH не должен быть пустым.")

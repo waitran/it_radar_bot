@@ -1,4 +1,5 @@
 """Site fixtures, completeness failures and integration; no real HTTP or secrets."""
+from datetime import datetime, timezone
 import copy
 import json
 from pathlib import Path
@@ -282,6 +283,7 @@ class WebsiteIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.cfg = Config.load(str(ROOT / 'config.yaml'))
         self.cfg.db_path = ':memory:'
+        self.cfg.owner_id = 123
         self.cfg.channels = []
         self.cfg.websites = [k2_source()]
         self.bot = Bot(self.cfg)
@@ -314,14 +316,15 @@ class WebsiteIntegrationTests(unittest.TestCase):
     def test_old_rtkit_demo_queue_is_preserved_but_not_sent(self):
         self.cfg.websites = [HttpSource('rtkit','RTKit','https://rtkit.ru/careers','rtkit_careers')]
         old = Item('rtkit','RTKit','vacancy:architect-100001','https://rtkit.ru/careers/architect-100001','Системный архитектор','',None,None)
-        self.bot.db.add_item(old,category='career')
         self.bot.set_enabled(True)
+        self.bot.db.add_item(old,category='career')
         with patch.object(RtkitCollector,'fetch',side_effect=WebsiteSourceError('HTTP 401')):
             self.bot.run_cycle()
         self.bot.notifier.send.assert_not_called()
         self.assertTrue(self.bot.db.exists(old.item_key))
-        self.assertEqual(len(self.bot.db.pending_unnotified()),0)
-        self.assertEqual(self.bot.db.item_row(old.item_key)['delivery_state'],'skipped')
+        self.assertEqual(self.bot.db.user_pending(datetime.now(timezone.utc)),[])
+        self.assertEqual(self.bot.db.item_row(old.item_key)['delivery_state'],'pending')
+        self.assertEqual(self.bot.db.user_delivery(123,old.item_key)['status'],'skipped')
 
 
 if __name__ == '__main__':

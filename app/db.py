@@ -72,8 +72,9 @@ class Database:
                     raise RuntimeError("Database is already in use by another bot process") from None
             self._conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA foreign_keys=ON")
             existing = {row[1] for row in self._conn.execute("PRAGMA table_info(seen_items)")}
-            if existing and "delivery_state" not in existing and path != ":memory:":
+            if existing and self._conn.execute("PRAGMA user_version").fetchone()[0] < 2 and path != ":memory:":
                 self.backup_path = path + ".before-delivery-" + str(time.time_ns()) + ".bak"
                 backup = sqlite3.connect(self.backup_path)
                 try:
@@ -108,10 +109,175 @@ class Database:
                                row['title'] or '',row['summary'] or '',row['apply_url'],None)
                     for alias in identities(old):
                         self._conn.execute("INSERT OR IGNORE INTO item_aliases VALUES(?,?)",(alias,row['item_key']))
-                self._conn.execute("PRAGMA user_version=1")
+                self._conn.execute("""CREATE TABLE IF NOT EXISTS users (
+                    telegram_id INTEGER PRIMARY KEY, username TEXT,
+                    is_active INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0,1)),
+                    created_at REAL NOT NULL, updated_at REAL NOT NULL,
+                    subscribed_at REAL NOT NULL)""")
+                self._conn.execute("""CREATE TABLE IF NOT EXISTS user_deliveries (
+                    id INTEGER PRIMARY KEY, telegram_id INTEGER NOT NULL REFERENCES users(telegram_id),
+                    item_key TEXT NOT NULL REFERENCES seen_items(item_key),
+                    status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    available_at REAL NOT NULL DEFAULT 0, sent_at REAL,
+                    telegram_message_id INTEGER, reason TEXT,
+                    UNIQUE(telegram_id,item_key))""")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_active_users ON users(is_active,subscribed_at)")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_user_queue ON user_deliveries(status,available_at,id)")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_user_status ON user_deliveries(telegram_id,status)")
+                if "eligible_at" not in columns:
+                    self._conn.execute("ALTER TABLE seen_items ADD COLUMN eligible_at REAL")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_item_eligibility ON seen_items(eligible_at)")
+                self._conn.execute("UPDATE user_deliveries SET status='uncertain',reason='interrupted_during_send' WHERE status='sending'")
+                self._conn.execute("""CREATE TABLE IF NOT EXISTS command_replies (
+                    telegram_id INTEGER PRIMARY KEY, text TEXT NOT NULL, status TEXT NOT NULL,
+                    available_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL)""")
+                self._conn.execute("UPDATE command_replies SET status='uncertain' WHERE status='sending'")
+                self._conn.execute("PRAGMA user_version=2")
         except Exception:
             self.close()
             raise
+
+    def migrate_owner(self, owner_id):
+        """One transaction; legacy queue remains available for audit, never replayed globally."""
+        with self._lock, self._conn:
+            if self._conn.execute("SELECT 1 FROM flags WHERE name='multi_owner_migrated'").fetchone():
+                return
+            saved = self._conn.execute("SELECT value FROM flags WHERE name='owner_id'").fetchone()
+            owner_id = int(saved[0]) if saved else owner_id
+            legacy = (saved or self._conn.execute("SELECT 1 FROM flags WHERE name IN ('enabled','ever_started')").fetchone()
+                      or self._conn.execute("SELECT 1 FROM seen_items LIMIT 1").fetchone())
+            if legacy and not owner_id:
+                raise RuntimeError("Legacy database has no saved owner ID; set the previous OWNER_TELEGRAM_ID for migration")
+            if owner_id and legacy:
+                enabled = self._conn.execute("SELECT value FROM flags WHERE name='enabled'").fetchone()
+                now = time.time()
+                self._conn.execute("INSERT OR IGNORE INTO users VALUES(?,NULL,?,?,?,?)",
+                                   (owner_id, int(bool(enabled and enabled[0]=='1')), now, now, 0))
+                self._conn.execute("""INSERT OR IGNORE INTO user_deliveries
+                    (telegram_id,item_key,status,attempts,available_at,telegram_message_id,reason,sent_at)
+                    SELECT ?,item_key,delivery_state,attempts,available_at,message_id,
+                    delivery_reason,NULL FROM seen_items""", (owner_id,))
+            self._conn.execute("""UPDATE user_deliveries SET status='skipped',reason='migrated_paused'
+                WHERE status='pending' AND telegram_id IN (SELECT telegram_id FROM users WHERE is_active=0)""")
+            self._conn.execute("INSERT INTO flags VALUES('multi_owner_migrated','1')")
+
+    def has_users(self, *, active_only=False):
+        with self._lock:
+            query = "SELECT 1 FROM users" + (" WHERE is_active=1" if active_only else "") + " LIMIT 1"
+            return self._conn.execute(query).fetchone() is not None
+
+    def user(self, telegram_id):
+        with self._lock:
+            return self._conn.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,)).fetchone()
+
+    def user_control(self, telegram_id, username=None, *, active=None, offset=None, reply=None):
+        """Subscription and polling offset commit before the acknowledgement HTTP call."""
+        now = time.time()
+        with self._lock, self._conn:
+            if active is not None:
+                self._conn.execute("""INSERT INTO users VALUES(?,?,?,?,?,?)
+                    ON CONFLICT(telegram_id) DO UPDATE SET username=excluded.username,
+                    subscribed_at=CASE WHEN users.is_active=0 AND excluded.is_active=1
+                        THEN excluded.subscribed_at ELSE users.subscribed_at END,
+                    is_active=excluded.is_active,updated_at=excluded.updated_at""",
+                    (telegram_id,username,int(active),now,now,now))
+                if not active:
+                    self._conn.execute("UPDATE user_deliveries SET status='skipped',reason='paused' WHERE telegram_id=? AND status='pending'", (telegram_id,))
+            if reply is not None:
+                # One outstanding answer per chat; a newer command replaces an older answer.
+                self._conn.execute("DELETE FROM command_replies WHERE status='pending' AND telegram_id<>? AND telegram_id IN (SELECT telegram_id FROM command_replies WHERE status='pending' ORDER BY updated_at DESC LIMIT -1 OFFSET 999)", (telegram_id,))
+                self._conn.execute("""INSERT INTO command_replies VALUES(?,?,'pending',0,?)
+                    ON CONFLICT(telegram_id) DO UPDATE SET text=excluded.text,status='pending',
+                    available_at=0,updated_at=excluded.updated_at""", (telegram_id,reply,now))
+            if offset is not None:
+                self._conn.execute("INSERT INTO flags VALUES('offset',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (str(offset),))
+
+    def pending_reply(self, now):
+        with self._lock:
+            return self._conn.execute("SELECT * FROM command_replies WHERE status='pending' AND available_at<=? ORDER BY updated_at LIMIT 1", (now,)).fetchone()
+
+    def set_reply_state(self, telegram_id, status, available_at=0):
+        with self._lock, self._conn:
+            if status == 'sent':
+                self._conn.execute("DELETE FROM command_replies WHERE telegram_id=?", (telegram_id,))
+            else:
+                self._conn.execute("UPDATE command_replies SET status=?,available_at=? WHERE telegram_id=?", (status,available_at,telegram_id))
+
+    def fill_user_queue(self, *, capacity=10000, batch=500):
+        """Bound active tasks; remaining audience is derived durably from item/subscription cutoffs."""
+        with self._lock, self._conn:
+            count = self._conn.execute("SELECT COUNT(*) FROM user_deliveries WHERE status IN ('pending','sending')").fetchone()[0]
+            limit = min(batch, max(0, capacity-count))
+            self._conn.execute("""INSERT OR IGNORE INTO user_deliveries(telegram_id,item_key,status)
+                SELECT u.telegram_id,s.item_key,'pending' FROM seen_items s JOIN users u
+                ON u.is_active=1 AND u.subscribed_at<=s.eligible_at
+                WHERE s.eligible_at IS NOT NULL AND s.delivery_state='pending'
+                AND (s.published_at IS NULL OR julianday(s.published_at)>julianday(u.subscribed_at,'unixepoch'))
+                AND NOT EXISTS(SELECT 1 FROM user_deliveries d WHERE d.telegram_id=u.telegram_id AND d.item_key=s.item_key)
+                ORDER BY s.eligible_at,s.item_key,u.telegram_id LIMIT ?""", (limit,))
+
+    def user_pending(self, now, limit=100, after_id=0):
+        with self._lock:
+            return self._conn.execute("""SELECT s.*,d.id AS delivery_id,d.telegram_id,
+                d.attempts AS user_attempts FROM user_deliveries d
+                JOIN users u ON u.telegram_id=d.telegram_id JOIN seen_items s ON s.item_key=d.item_key
+                WHERE d.status='pending' AND d.available_at<=? AND u.is_active=1 AND d.id>?
+                ORDER BY d.id LIMIT ?""", (now.timestamp(),after_id,limit)).fetchall()
+
+    def user_delivery(self, telegram_id, item_key):
+        with self._lock:
+            return self._conn.execute("SELECT * FROM user_deliveries WHERE telegram_id=? AND item_key=?", (telegram_id,item_key)).fetchone()
+
+    def claim_user_delivery(self, delivery_id, now):
+        with self._lock, self._conn:
+            return self._conn.execute("""UPDATE user_deliveries SET status='sending',attempts=attempts+1,
+                reason='request_started' WHERE id=? AND status='pending' AND available_at<=?
+                AND EXISTS(SELECT 1 FROM users u WHERE u.telegram_id=user_deliveries.telegram_id AND u.is_active=1)""",
+                (delivery_id,now.timestamp())).rowcount == 1
+
+    def finish_user_delivery(self, delivery_id, state, reason, *, available_at=0, message_id=None):
+        if state not in {'pending','sent','uncertain','failed','expired','skipped'}:
+            raise ValueError('Invalid delivery state')
+        with self._lock, self._conn:
+            self._conn.execute("""UPDATE user_deliveries SET status=?,reason=?,available_at=?,
+                telegram_message_id=COALESCE(?,telegram_message_id),sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END
+                WHERE id=?""", (state,reason,available_at,message_id,state,time.time(),delivery_id))
+
+    def user_delivery_counts(self, telegram_id):
+        with self._lock:
+            return dict(self._conn.execute("SELECT status,COUNT(*) FROM user_deliveries WHERE telegram_id=? GROUP BY status", (telegram_id,)))
+
+    def has_personal_delivery(self, item_key):
+        with self._lock:
+            return self._conn.execute("SELECT 1 FROM user_deliveries WHERE item_key=?", (item_key,)).fetchone() is not None
+
+    def multi_delivery_counts(self, telegram_id=None):
+        with self._lock:
+            if telegram_id is None:
+                return dict(self._conn.execute("SELECT status,COUNT(*) FROM user_deliveries GROUP BY status"))
+            return dict(self._conn.execute("SELECT status,COUNT(*) FROM user_deliveries WHERE telegram_id=? GROUP BY status", (telegram_id,)))
+
+    def multi_review(self, telegram_id=None):
+        with self._lock:
+            return self._conn.execute("""SELECT telegram_id,item_key,status,reason,telegram_message_id
+                FROM user_deliveries WHERE status IN ('uncertain','failed','legacy_review')
+                AND (? IS NULL OR telegram_id=?) ORDER BY id LIMIT 1000""", (telegram_id,telegram_id)).fetchall()
+
+    def resolve_user_delivery(self, telegram_id, item_key, outcome, allow_duplicate_risk=False):
+        mapping = {'sent':'sent','retry':'pending','skip':'skipped'}
+        with self._lock, self._conn:
+            row = self._conn.execute("SELECT status FROM user_deliveries WHERE telegram_id=? AND item_key=?", (telegram_id,item_key)).fetchone()
+            if not row or row[0] not in {'uncertain','failed','legacy_review'} or outcome not in mapping:
+                raise ValueError('Only uncertain, failed or legacy_review deliveries can be resolved')
+            if outcome == 'retry':
+                active = self._conn.execute("SELECT is_active FROM users WHERE telegram_id=?", (telegram_id,)).fetchone()
+                if not active or not active[0]:
+                    raise ValueError('Subscriber is inactive')
+                if row[0] in {'uncertain','legacy_review'} and not allow_duplicate_risk:
+                    raise ValueError('Check Telegram first; retry requires --allow-duplicate-risk')
+            self._conn.execute("""UPDATE user_deliveries SET status=?,reason='operator_resolution',available_at=0,
+                sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END WHERE telegram_id=? AND item_key=?""",
+                (mapping[outcome],outcome,time.time(),telegram_id,item_key))
 
     @staticmethod
     def serialize(item):
@@ -170,10 +336,10 @@ class Database:
                     return True
         return False
 
-    def add_item(self, item, baseline=False, category=None):
+    def add_item(self, item, baseline=False, category=None, *, eligible_at=None):
         state = ('baseline' if category else 'rejected') if baseline else 'pending'
         with self._lock, self._conn:
-            self._conn.execute("""INSERT OR IGNORE INTO seen_items
+            inserted = self._conn.execute("""INSERT OR IGNORE INTO seen_items
                 (item_key,source_key,external_id,url,title,summary,apply_url,category,title_hash,
                  published_at,first_seen_at,notified,baseline,payload,delivery_state)
                  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", (
@@ -181,6 +347,9 @@ class Database:
                 item.apply_url,category,item.title_hash,
                 item.published_at.isoformat() if item.published_at else None,self._now(),
                 int(baseline),int(baseline),self.serialize(item),state))
+            if inserted.rowcount and not baseline and category:
+                self._conn.execute("UPDATE seen_items SET eligible_at=? WHERE item_key=?",
+                                   (eligible_at if eligible_at is not None else time.time(), item.item_key))
             if category:
                 for alias in identities(item):
                     self._conn.execute("INSERT OR IGNORE INTO item_aliases VALUES(?,?)",(alias,item.item_key))
@@ -226,7 +395,7 @@ class Database:
         with self._lock:
             return self._conn.execute("SELECT item_key,delivery_state,delivery_reason,message_id FROM seen_items WHERE delivery_state IN ('uncertain','failed','legacy_review')").fetchall()
 
-    def apply_control(self, enabled=None, offset=None):
+    def apply_control(self, enabled=None, offset=None, check_requested_at=None):
         """Persist command state and update offset atomically before acknowledging."""
         with self._lock, self._conn:
             values = []
@@ -241,6 +410,8 @@ class Database:
                     self._conn.execute("UPDATE seen_items SET delivery_state='skipped',delivery_reason='paused' WHERE delivery_state='pending'")
             if offset is not None:
                 values.append(('offset',str(offset)))
+            if check_requested_at is not None:
+                values.extend([('check_pending','1'),('check_last_request',str(check_requested_at))])
             self._conn.executemany("INSERT INTO flags(name,value) VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value",values)
 
     def resolve_delivery(self, item_key, outcome):

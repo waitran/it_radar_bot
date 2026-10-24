@@ -18,7 +18,7 @@ from app.config import Config, TelegramChannelSource, HttpSource
 from app.db import Database, SCHEMA
 from app.dedup import canonical_url
 from app.formatting import units
-from app.main import Bot, handle_update, poll_updates
+from app.main import Bot, handle_update, poll_updates, HELP
 from app.models import Item
 from app.notify import TelegramNotifier, DeliveryResult, BotAPIError
 from app.collectors.telegram_channel import fetch_post
@@ -195,41 +195,42 @@ class BotFixture(unittest.TestCase):
         self.bot._available_sources={'tg_example'};self.bot._last_scan=NOW.timestamp()
 
     def queue(self,identifier='1'):
-        it=item(identifier);self.bot.db.add_item(it,category='internships');self.bot._fresh_items[it.item_key]=it
+        it=item(identifier);it.published_at=datetime.now(timezone.utc)
+        self.bot.db.add_item(it,category='internships');self.bot.db.fill_user_queue();self.bot._fresh_items[it.item_key]=it
         return it
 
 class DeliveryTests(BotFixture):
     def test_success_is_persisted_and_not_sent_twice(self):
         it=self.queue();self.assertTrue(self.bot.deliver(it,now=NOW))
         self.assertFalse(self.bot.deliver(it,now=NOW+timedelta(seconds=2)))
-        row=self.bot.db.item_row(it.item_key)
-        self.assertEqual(row['delivery_state'],'sent');self.assertEqual(row['message_id'],42)
+        row=self.bot.db.user_delivery(123,it.item_key)
+        self.assertEqual(row['status'],'sent');self.assertEqual(row['telegram_message_id'],42)
         self.assertEqual(self.bot.notifier.send.call_count,1)
 
     def test_queued_expired_opportunity_is_not_sent(self):
         it=self.queue();it.deadline=NOW-timedelta(seconds=1)
         self.assertFalse(self.bot.deliver(it,now=NOW))
-        self.assertEqual(self.bot.db.item_row(it.item_key)['delivery_state'],'expired')
+        self.assertEqual(self.bot.db.user_delivery(123,it.item_key)['status'],'expired')
         self.bot.notifier.send.assert_not_called()
 
     def test_changed_rules_are_applied_before_delivery(self):
         it=self.queue();self.cfg.rules.categories={}
         self.bot.drain_pending(now=NOW)
         self.bot.notifier.send.assert_not_called()
-        self.assertEqual(self.bot.db.item_row(it.item_key)['delivery_state'],'expired')
+        self.assertEqual(self.bot.db.user_delivery(123,it.item_key)['status'],'expired')
 
     def test_uncertain_send_is_not_automatically_repeated(self):
         it=self.queue();self.bot.notifier.send.return_value=DeliveryResult('uncertain')
         self.bot.drain_pending(now=NOW);self.bot.drain_pending(now=NOW+timedelta(seconds=100))
         self.assertEqual(self.bot.notifier.send.call_count,1)
-        self.assertEqual(self.bot.db.item_row(it.item_key)['delivery_state'],'uncertain')
+        self.assertEqual(self.bot.db.user_delivery(123,it.item_key)['status'],'uncertain')
 
     def test_429_delays_the_entire_queue(self):
         it=self.queue('1');self.queue('2')
         self.bot.notifier.send.return_value=DeliveryResult('retry',code=429,retry_after=30)
         self.bot.drain_pending(now=NOW);self.bot.drain_pending(now=NOW+timedelta(seconds=29))
         self.assertEqual(self.bot.notifier.send.call_count,1)
-        available=self.bot.db.item_row(it.item_key)['available_at']
+        available=self.bot.db.user_delivery(123,it.item_key)['available_at']
         self.assertGreaterEqual(available,NOW.timestamp()+30)
         self.bot.notifier.send.return_value=DeliveryResult('sent',message_id=42)
         self.bot.drain_pending(now=datetime.fromtimestamp(available+1,timezone.utc))
@@ -238,10 +239,10 @@ class DeliveryTests(BotFixture):
     def test_safe_connection_failures_back_off(self):
         it=self.queue();self.bot.notifier.send.return_value=DeliveryResult('retry',retry_after=10)
         self.bot.deliver(it,now=NOW)
-        available=self.bot.db.item_row(it.item_key)['available_at']
+        available=self.bot.db.user_delivery(123,it.item_key)['available_at']
         next_time=datetime.fromtimestamp(available+1,timezone.utc)
         self.bot.deliver(it,now=next_time)
-        row=self.bot.db.item_row(it.item_key)
+        row=self.bot.db.user_delivery(123,it.item_key)
         self.assertEqual(row['attempts'],2)
         self.assertGreaterEqual(row['available_at'],next_time.timestamp()+20)
 
@@ -251,7 +252,7 @@ class DeliveryTests(BotFixture):
         self.assertFalse(self.bot.is_enabled())
         self.bot.set_enabled(True);it=self.queue('2')
         self.bot.notifier.send.return_value=DeliveryResult('failed',code=401)
-        self.bot.deliver(it,now=NOW)
+        self.bot.deliver(it,now=datetime.fromtimestamp(float(self.bot.db.get_flag('send_after'))+1,timezone.utc))
         self.assertTrue(self.bot.stop_event.is_set())
         self.assertIsNotNone(self.bot.fatal_error)
 
@@ -264,7 +265,7 @@ class DeliveryTests(BotFixture):
 
     def test_removed_source_is_skipped(self):
         it=self.queue();self.cfg.channels=[];self.bot.drain_pending(now=NOW)
-        self.assertEqual(self.bot.db.item_row(it.item_key)['delivery_state'],'skipped')
+        self.assertEqual(self.bot.db.user_delivery(123,it.item_key)['status'],'skipped')
         self.bot.notifier.send.assert_not_called()
 
     def test_queued_telegram_post_is_refreshed_and_closed_post_rejected(self):
@@ -274,16 +275,16 @@ class DeliveryTests(BotFixture):
             self.bot.drain_pending(now=NOW)
         fetch.assert_called_once_with('example',1)
         self.bot.notifier.send.assert_not_called()
-        self.assertEqual(self.bot.db.item_row(it.item_key)['delivery_state'],'expired')
+        self.assertEqual(self.bot.db.user_delivery(123,it.item_key)['status'],'expired')
 
     def test_missing_post_and_missing_vacancy_are_expired(self):
         it=self.queue();self.bot._fresh_items.clear()
         with patch('app.main.telegram_channel.fetch_post',return_value=None):self.bot.drain_pending(now=NOW)
-        self.assertEqual(self.bot.db.item_row(it.item_key)['delivery_state'],'expired')
+        self.assertEqual(self.bot.db.user_delivery(123,it.item_key)['status'],'expired')
         self.cfg.websites=[HttpSource('web','Web','https://careers.croc.ru/vacancies/','croc_vacancies')]
-        old=item('2','web');self.bot.db.add_item(old,category='internships');self.bot._available_sources.add('web')
+        old=item('2','web');old.published_at=datetime.now(timezone.utc);self.bot.db.add_item(old,category='internships');self.bot._available_sources.add('web')
         self.bot.drain_pending(now=NOW)
-        self.assertEqual(self.bot.db.item_row(old.item_key)['delivery_state'],'expired')
+        self.assertEqual(self.bot.db.user_delivery(123,old.item_key)['status'],'expired')
 
     def test_stop_during_collection_cannot_send_later_results(self):
         self.bot.db.save_telegram_cursor('tg_example',1)
@@ -292,13 +293,13 @@ class DeliveryTests(BotFixture):
             return [item('2')]
         with patch('app.main.telegram_channel.fetch_channel',side_effect=collect):self.bot.run_cycle()
         self.bot.notifier.send.assert_not_called()
-        self.assertEqual(self.bot.db.item_row('tg_example:2')['delivery_state'],'baseline')
+        self.assertIsNone(self.bot.db.user_delivery(123,'tg_example:2'))
 
     def test_stop_discards_pending_without_archiving_for_next_start(self):
         it=self.queue();self.bot.set_enabled(False);self.bot.set_enabled(True)
         self.bot.drain_pending(now=NOW)
         self.bot.notifier.send.assert_not_called()
-        self.assertEqual(self.bot.db.item_row(it.item_key)['delivery_state'],'skipped')
+        self.assertEqual(self.bot.db.user_delivery(123,it.item_key)['status'],'skipped')
 
     def test_resume_baselines_unseen_pause_history_then_sends_future_posts(self):
         self.bot.db.save_telegram_cursor('tg_example',1)
@@ -306,16 +307,17 @@ class DeliveryTests(BotFixture):
         with patch('app.main.telegram_channel.fetch_channel',return_value=[item('2')]):
             self.bot.run_cycle()
         self.bot.notifier.send.assert_not_called()
-        self.assertEqual(self.bot.db.item_row('tg_example:2')['delivery_state'],'baseline')
-        with patch('app.main.telegram_channel.fetch_channel',return_value=[item('3')]):
+        self.assertIsNone(self.bot.db.user_delivery(123,'tg_example:2'))
+        fresh=item('3');fresh.published_at=datetime.now(timezone.utc)
+        with patch('app.main.telegram_channel.fetch_channel',return_value=[fresh]):
             self.bot.run_cycle()
         self.assertEqual(self.bot.notifier.send.call_count,1)
-        self.assertEqual(self.bot.db.item_row('tg_example:3')['delivery_state'],'sent')
+        self.assertEqual(self.bot.db.user_delivery(123,'tg_example:3')['status'],'sent')
 
     def test_stop_waits_for_inflight_request_but_blocks_next(self):
         first=self.queue('1');second=self.queue('2')
         entered,released,stopped=threading.Event(),threading.Event(),threading.Event()
-        def send(text):
+        def send(text, **kwargs):
             entered.set();released.wait(3)
             return DeliveryResult('sent',message_id=42)
         self.bot.notifier.send.side_effect=send
@@ -334,7 +336,7 @@ class DeliveryTests(BotFixture):
         with patch('app.main.telegram_channel.fetch_channel',return_value=[]),patch('app.main.telegram_channel.fetch_post',return_value=it) as refresh:
             self.bot.run_cycle()
         refresh.assert_called_once()
-        self.assertEqual(self.bot.db.item_row(it.item_key)['delivery_state'],'sent')
+        self.assertEqual(self.bot.db.user_delivery(123,it.item_key)['status'],'sent')
 
 
 class CommandTests(BotFixture):
@@ -350,15 +352,17 @@ class CommandTests(BotFixture):
         handle_update(self.bot,self.update(9,'/start'))
         self.assertFalse(self.bot.is_enabled())
 
-    def test_only_exact_owner_private_commands_are_accepted(self):
-        self.bot.service_message=Mock()
-        for update in [self.update(1,'/stopper'),self.update(2,'/stop',chat={'id':123,'type':'group'}),
+    def test_private_sender_identity_and_bot_command_suffix_are_checked(self):
+        self.bot.service_message=Mock(return_value=DeliveryResult('sent',message_id=1))
+        for update in [self.update(2,'/stop',chat={'id':123,'type':'group'}),
                        self.update(3,'/stop',**{'from':{'id':999}}),self.update(4,'/stop@other'),
                        {'update_id':5,'edited_message':self.update(5,'/stop')['message']}]:
             handle_update(self.bot,update)
         self.assertTrue(self.bot.is_enabled());self.bot.service_message.assert_not_called()
         self.bot.bot_username='mybot';handle_update(self.bot,self.update(6,'/stop@mybot'))
         self.assertFalse(self.bot.is_enabled())
+        handle_update(self.bot,self.update(7,'/stopper'))
+        self.bot.service_message.assert_called_with('Неизвестная команда.\n'+HELP,telegram_id=123)
 
     def test_409_terminates_polling(self):
         self.bot.notifier.call=Mock(side_effect=BotAPIError(409))

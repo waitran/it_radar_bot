@@ -6,7 +6,7 @@ services:
     stop_grace_period: 60s
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Задайте TELEGRAM_BOT_TOKEN в .env или окружении}
-      OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:?Задайте OWNER_TELEGRAM_ID (числовой chat_id владельца)}
+      OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:-0}
       DB_PATH: /data/bot.db
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-3600}
     volumes:

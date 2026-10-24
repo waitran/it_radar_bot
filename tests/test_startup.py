@@ -43,7 +43,7 @@ class StartupTests(unittest.TestCase):
     def test_invalid_runtime_settings_do_not_echo_values(self):
         for name, value in [("TELEGRAM_BOT_TOKEN", "private-invalid-input"),
                             ("OWNER_TELEGRAM_ID", "private-invalid-input"),
-                            ("OWNER_TELEGRAM_ID", "0"), ("OWNER_TELEGRAM_ID", "-1"),
+                            ("OWNER_TELEGRAM_ID", "-1"),
                             ("DB_PATH", " ")]:
             with self.subTest(name=name, kind="invalid"):
                 with self.assertRaises(ConfigurationError) as exc:
@@ -51,6 +51,11 @@ class StartupTests(unittest.TestCase):
                 self.assertIn(name, str(exc.exception))
                 if "private" in value:
                     self.assertNotIn(value, str(exc.exception))
+
+    def test_owner_is_optional(self):
+        cfg = self.load(OWNER_TELEGRAM_ID="0")
+        cfg.validate_runtime()
+        self.assertEqual(cfg.owner_id, 0)
 
     def test_invalid_numbers_are_safe(self):
         for name in ["POLL_INTERVAL_SECONDS", "REQUEST_TIMEOUT_SECONDS", "FIRST_RUN_LOOKBACK_HOURS"]:
