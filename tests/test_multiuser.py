@@ -187,9 +187,9 @@ class MultiuserTests(unittest.TestCase):
         self.assertEqual(self.bot.db.user_pending(self.later()),[])
 
     def test_queue_bound_and_lazy_fanout_survive_restart(self):
-        self.subscribe();it=self.queue()
-        # Isolate capacity test from the fixture's initial fill.
-        self.bot.db._conn.execute('DELETE FROM user_deliveries');self.bot.db._conn.commit()
+        self.subscribe();it=item()
+        it.published_at=datetime.now(timezone.utc)
+        self.bot.db.add_item(it,category='internships')
         self.bot.db.fill_user_queue(capacity=1,batch=1)
         rows=self.bot.db.user_pending(self.later())
         self.assertEqual(len(rows),1)

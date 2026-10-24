@@ -13,7 +13,7 @@ from app.dedup import identities
 import threading
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 COMMAND_REPLY_INTERVAL = 5.0
 
 SCHEMA = """
@@ -141,6 +141,7 @@ class Database:
                     UNIQUE(telegram_id,item_key))""")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_active_users ON users(is_active,subscribed_at)")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_user_queue ON user_deliveries(status,available_at,id)")
+                self._conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_status_id ON user_deliveries(status,id)")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_user_status ON user_deliveries(telegram_id,status)")
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_item_status ON user_deliveries(item_key,status)")
                 if "eligible_at" not in columns:
@@ -160,10 +161,39 @@ class Database:
                 self._conn.execute("UPDATE command_replies SET status='uncertain' WHERE status='sending'")
                 self._conn.execute("""CREATE TABLE IF NOT EXISTS command_reply_limits (
                     telegram_id INTEGER PRIMARY KEY, reply_after REAL NOT NULL)""")
+                fanout_exists = self._conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='delivery_fanout'").fetchone()
+                self._conn.execute("""CREATE TABLE IF NOT EXISTS delivery_fanout (
+                    id INTEGER PRIMARY KEY, item_key TEXT NOT NULL UNIQUE REFERENCES seen_items(item_key),
+                    source_key TEXT NOT NULL, cursor_id INTEGER NOT NULL DEFAULT 0,
+                    audience_max_id INTEGER NOT NULL, priority INTEGER NOT NULL DEFAULT 0)""")
+                self._conn.execute('CREATE INDEX IF NOT EXISTS idx_fanout_source ON delivery_fanout(source_key,priority,id)')
+                if not fanout_exists:
+                    self._conn.execute("INSERT INTO flags VALUES('queue_dirty','1') ON CONFLICT(name) DO UPDATE SET value='1'")
+                    # Reconcile the old lazy queue once, in bounded batches after startup.
+                    # Fresh events have priority over this migration backlog.
+                    self._conn.execute("""INSERT INTO delivery_fanout(item_key,source_key,audience_max_id,priority)
+                        SELECT item_key,source_key,COALESCE((SELECT MAX(telegram_id) FROM users),0),1
+                        FROM seen_items WHERE delivery_state='pending' AND eligible_at IS NOT NULL
+                        ORDER BY eligible_at,item_key""")
+                self._conn.execute("INSERT OR IGNORE INTO flags VALUES('queue_dirty','1')")
                 self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         except Exception:
             self.close()
             raise
+
+    def _flag(self, name, default='0'):
+        row = self._conn.execute('SELECT value FROM flags WHERE name=?',(name,)).fetchone()
+        return row[0] if row else default
+
+    def _put_flag(self, name, value):
+        self._conn.execute("INSERT INTO flags VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=excluded.value",(name,str(value)))
+
+    def _schedule_fanout(self, item_key, *, reset=False):
+        if reset:
+            self._conn.execute('DELETE FROM delivery_fanout WHERE item_key=?',(item_key,))
+        self._conn.execute("""INSERT OR IGNORE INTO delivery_fanout(item_key,source_key,audience_max_id)
+            SELECT item_key,source_key,COALESCE((SELECT MAX(telegram_id) FROM users),0)
+            FROM seen_items WHERE item_key=? AND delivery_state='pending' AND eligible_at IS NOT NULL""",(item_key,))
 
     def migrate_owner(self, owner_id):
         """One transaction; legacy queue remains available for audit, never replayed globally."""
@@ -187,6 +217,7 @@ class Database:
                     delivery_reason,NULL FROM seen_items""", (owner_id,))
             self._conn.execute("""UPDATE user_deliveries SET status='skipped',reason='migrated_paused'
                 WHERE status='pending' AND telegram_id IN (SELECT telegram_id FROM users WHERE is_active=0)""")
+            self._put_flag('queue_dirty','1')
             self._conn.execute("INSERT INTO flags VALUES('multi_owner_migrated','1')")
 
     def has_users(self, *, active_only=False):
@@ -269,74 +300,171 @@ class Database:
                     WHERE telegram_id=? AND (? IS NULL OR generation=?)""",
                     (status,available_at,telegram_id,generation,generation))
 
+    def _reconcile_queue(self, configured, available, blocked):
+        """Reclassify live tasks only when readiness or a direct retry changed."""
+        signature = json.dumps([configured,available,sorted(blocked)],ensure_ascii=False)
+        if self._flag('queue_availability','') == signature and self._flag('queue_dirty') == '0':
+            return
+        if configured is not None:
+            if configured:
+                placeholders = ','.join('?' for _ in configured)
+                self._conn.execute(f"""UPDATE user_deliveries AS d SET status='skipped',
+                    reason='source_disabled_or_unverified' WHERE status IN ('pending','suspended')
+                    AND NOT EXISTS(SELECT 1 FROM seen_items s WHERE s.item_key=d.item_key
+                        AND s.source_key IN ({placeholders}))""",configured)
+            else:
+                self._conn.execute("""UPDATE user_deliveries SET status='skipped',
+                    reason='source_disabled_or_unverified' WHERE status IN ('pending','suspended')""")
+        if available is not None:
+            if available:
+                placeholders = ','.join('?' for _ in available)
+                self._conn.execute(f"""UPDATE user_deliveries AS d SET status='suspended',
+                    reason='source_unavailable' WHERE status='pending' AND NOT EXISTS
+                    (SELECT 1 FROM seen_items s WHERE s.item_key=d.item_key
+                        AND s.source_key IN ({placeholders}))""",available)
+            else:
+                self._conn.execute("UPDATE user_deliveries SET status='suspended',reason='source_unavailable' WHERE status='pending'")
+        self._conn.execute("""UPDATE user_deliveries SET status='suspended',reason='detail_unavailable'
+            WHERE status='pending' AND item_key IN (SELECT item_key FROM blocked_delivery_items)""")
+        if available == []:
+            upper = 0
+        else:
+            source_clause = '' if available is None else (
+                ' AND EXISTS(SELECT 1 FROM seen_items s WHERE s.item_key=d.item_key AND s.source_key IN ('+
+                ','.join('?' for _ in available)+'))')
+            upper = self._conn.execute("""SELECT COALESCE(MAX(d.id),0) FROM user_deliveries d
+                WHERE d.status='suspended' AND NOT EXISTS
+                    (SELECT 1 FROM blocked_delivery_items b WHERE b.item_key=d.item_key)"""+source_clause,
+                () if available is None else available).fetchone()[0]
+        self._put_flag('resume_cursor','0')
+        self._put_flag('resume_upper',upper)
+        self._put_flag('queue_availability',signature)
+        self._put_flag('queue_dirty','0')
+
+    def _resume_batch(self, slots, budget, available, blocked, stats):
+        cursor,upper = int(self._flag('resume_cursor')),int(self._flag('resume_upper'))
+        if not slots or not budget or cursor >= upper:
+            return slots
+        rows = self._conn.execute("""SELECT d.id,d.item_key,s.source_key,u.is_active
+            FROM user_deliveries d INDEXED BY idx_delivery_status_id
+            JOIN seen_items s ON s.item_key=d.item_key JOIN users u ON u.telegram_id=d.telegram_id
+            WHERE d.status='suspended' AND d.id>? AND d.id<=? ORDER BY d.id LIMIT ?""",(cursor,upper,budget)).fetchall()
+        for row in rows:
+            if not slots:
+                break
+            cursor = row['id']
+            stats['suspended_examined'] += 1
+            if (row['is_active'] and row['item_key'] not in blocked
+                    and (available is None or row['source_key'] in available)):
+                self._conn.execute("UPDATE user_deliveries SET status='pending',reason='source_recovered' WHERE id=?",(row['id'],))
+                slots -= 1
+                stats['resumed'] += 1
+        if not rows or (len(rows) < budget and cursor == rows[-1]['id']):
+            cursor = upper
+        self._put_flag('resume_cursor',cursor)
+        return slots
+
+    def _fanout_batch(self, slots, budget, sources, stats):
+        if not slots or not budget or not sources:
+            return slots
+        last = self._flag('queue_source_cursor','')
+        sources = [key for key in sources if key > last]+[key for key in sources if key <= last]
+        quota = max(1,budget//len(sources))
+        users_left,jobs_left = budget,budget
+        for source in sources:
+            source_users = min(quota,users_left)
+            source_jobs = min(quota,jobs_left)
+            visited = False
+            while slots and source_users and source_jobs:
+                job = self._conn.execute("""SELECT f.*,s.delivery_state,s.eligible_at,s.opportunity_at
+                    FROM delivery_fanout f JOIN seen_items s ON s.item_key=f.item_key
+                    WHERE f.source_key=? AND NOT EXISTS
+                        (SELECT 1 FROM blocked_delivery_items b WHERE b.item_key=f.item_key)
+                    ORDER BY f.priority,f.id LIMIT 1""",(source,)).fetchone()
+                if not job:
+                    break
+                visited = True
+                stats['jobs_examined'] += 1
+                source_jobs -= 1; jobs_left -= 1
+                if job['delivery_state'] != 'pending' or job['eligible_at'] is None:
+                    self._conn.execute('DELETE FROM delivery_fanout WHERE id=?',(job['id'],))
+                    continue
+                # Seek by registry PK, not by history or filtered subscriber count.
+                # Ineligible and already-materialized users also advance the cursor.
+                page_limit = source_users
+                rows = self._conn.execute("""SELECT telegram_id,
+                    (is_active=1 AND subscribed_at<=? AND (? IS NULL OR
+                        julianday(?)>julianday(subscribed_at,'unixepoch'))) AS eligible
+                    FROM users WHERE telegram_id>? AND telegram_id<=? ORDER BY telegram_id LIMIT ?""",
+                    (job['eligible_at'],job['opportunity_at'],job['opportunity_at'],
+                     job['cursor_id'],job['audience_max_id'],page_limit)).fetchall()
+                cursor = job['cursor_id']
+                for user in rows:
+                    if not slots:
+                        break
+                    cursor = user['telegram_id']
+                    stats['users_examined'] += 1
+                    source_users -= 1; users_left -= 1
+                    if user['eligible']:
+                        inserted = self._conn.execute("""INSERT OR IGNORE INTO user_deliveries
+                            (telegram_id,item_key,status) VALUES(?,?,'pending')""",(cursor,job['item_key'])).rowcount
+                        slots -= inserted
+                        stats['created'] += inserted
+                # Do not skip the unprocessed tail when capacity ends mid-page.
+                complete = (cursor >= job['audience_max_id'] or not rows or
+                            (len(rows) < page_limit and cursor == rows[-1]['telegram_id']))
+                if complete:
+                    self._conn.execute('DELETE FROM delivery_fanout WHERE id=?',(job['id'],))
+                else:
+                    self._conn.execute('UPDATE delivery_fanout SET cursor_id=? WHERE id=?',(cursor,job['id']))
+            if visited:
+                self._put_flag('queue_source_cursor',source)
+            if not slots or not users_left or not jobs_left:
+                break
+        return slots
+
     def fill_user_queue(self, *, capacity=10000, batch=500,
                         available_sources=None, configured_sources=None, blocked_items=()):
-        """Materialize a bounded, fair queue; unavailable sources keep durable suspended tasks."""
+        """Bounded durable audience pagination plus bounded suspended recovery."""
+        stats = dict(users_examined=0,suspended_examined=0,jobs_examined=0,created=0,resumed=0)
         with self._lock, self._conn:
-            if configured_sources is not None:
-                configured = sorted(configured_sources)
-                if configured:
-                    placeholders = ','.join('?' for _ in configured)
-                    self._conn.execute(f"""UPDATE user_deliveries SET status='skipped',
-                        reason='source_disabled_or_unverified' WHERE status IN ('pending','suspended')
-                        AND item_key IN (SELECT item_key FROM seen_items WHERE source_key NOT IN ({placeholders}))""", configured)
-                else:
-                    self._conn.execute("""UPDATE user_deliveries SET status='skipped',
-                        reason='source_disabled_or_unverified' WHERE status IN ('pending','suspended')""")
-            if available_sources is None:
-                sources = [r[0] for r in self._conn.execute('SELECT DISTINCT source_key FROM seen_items ORDER BY source_key')]
-            else:
-                sources = sorted(available_sources)
-                if configured_sources is not None:
-                    sources = [key for key in sources if key in configured_sources]
-                if sources:
-                    placeholders = ','.join('?' for _ in sources)
-                    self._conn.execute(f"""UPDATE user_deliveries SET status='suspended',
-                        reason='source_unavailable' WHERE status='pending' AND item_key IN
-                        (SELECT item_key FROM seen_items WHERE source_key NOT IN ({placeholders}))""", sources)
-                else:
-                    self._conn.execute("""UPDATE user_deliveries SET status='suspended',
-                        reason='source_unavailable' WHERE status='pending'""")
+            configured = None if configured_sources is None else sorted(configured_sources)
+            available = None if available_sources is None else sorted(available_sources)
+            if configured is not None and available is not None:
+                available = [key for key in available if key in configured]
+            elif configured is not None:
+                available = configured
+            blocked = set(blocked_items)
+            # TEMP tables do not survive a restart even when the durable signature does.
             self._conn.execute('DELETE FROM blocked_delivery_items')
-            self._conn.executemany('INSERT OR IGNORE INTO blocked_delivery_items VALUES(?)', ((key,) for key in blocked_items))
-            self._conn.execute("""UPDATE user_deliveries SET status='suspended',reason='detail_unavailable'
-                WHERE status='pending' AND item_key IN (SELECT item_key FROM blocked_delivery_items)""")
+            self._conn.executemany('INSERT INTO blocked_delivery_items VALUES(?)',((key,) for key in blocked))
+            self._reconcile_queue(configured,available,blocked)
             count = self._conn.execute("SELECT COUNT(*) FROM user_deliveries WHERE status IN ('pending','sending')").fetchone()[0]
-            remaining = min(max(0, batch), max(0, capacity-count))
-            if not remaining or not sources:
-                return
-            cursor = self._conn.execute("SELECT value FROM flags WHERE name='queue_source_cursor'").fetchone()
-            last = cursor[0] if cursor else ''
-            sources = [key for key in sources if key > last] + [key for key in sources if key <= last]
-            quota = max(1, remaining // len(sources))
-            for source in sources:
-                if not remaining:
+            slots,budget = max(0,capacity-count),max(0,batch)
+            if not slots or not budget:
+                return stats
+            sources = (available if available is not None else
+                       [row[0] for row in self._conn.execute('SELECT DISTINCT source_key FROM delivery_fanout')])
+            resume = int(self._flag('resume_cursor')) < int(self._flag('resume_upper'))
+            fanout = bool(sources) and bool(self._conn.execute('SELECT 1 FROM delivery_fanout LIMIT 1').fetchone())
+            first = 'fanout' if self._flag('queue_fill_kind') == 'resume' else 'resume'
+            if not resume: first = 'fanout'
+            if not fanout: first = 'resume'
+            portion = max(1,budget//2) if resume and fanout else budget
+            order = (first,'resume' if first == 'fanout' else 'fanout')
+            for index,kind in enumerate(order):
+                remaining = budget-stats['users_examined']-stats['suspended_examined']
+                allowance = min(portion if index == 0 else remaining,remaining)
+                before = stats['users_examined']+stats['suspended_examined']+stats['jobs_examined']
+                if kind == 'fanout':
+                    slots = self._fanout_batch(slots,allowance,sources,stats)
+                else:
+                    slots = self._resume_batch(slots,allowance,available,blocked,stats)
+                if stats['users_examined']+stats['suspended_examined']+stats['jobs_examined'] > before:
+                    self._put_flag('queue_fill_kind',kind)
+                if not slots:
                     break
-                # Resume existing tasks with their attempts/retry deadline intact, including
-                # migrated owner tasks whose events have no eligible_at. Never revive sent,
-                # uncertain or skipped rows. New tasks still respect subscription cutoffs.
-                limit = min(quota,remaining)
-                rows = self._conn.execute("""SELECT d.telegram_id,d.item_key
-                    FROM user_deliveries d JOIN users u ON u.telegram_id=d.telegram_id
-                    JOIN seen_items s ON s.item_key=d.item_key
-                    WHERE d.status='suspended' AND u.is_active=1 AND s.source_key=?
-                    AND NOT EXISTS(SELECT 1 FROM blocked_delivery_items b WHERE b.item_key=s.item_key)
-                    ORDER BY d.id LIMIT ?""", (source,limit)).fetchall()
-                if len(rows) < limit:
-                    rows.extend(self._conn.execute("""SELECT u.telegram_id,s.item_key
-                        FROM seen_items s JOIN users u ON u.is_active=1 AND u.subscribed_at<=s.eligible_at
-                        WHERE s.source_key=? AND s.eligible_at IS NOT NULL AND s.delivery_state='pending'
-                        AND NOT EXISTS(SELECT 1 FROM blocked_delivery_items b WHERE b.item_key=s.item_key)
-                        AND (s.opportunity_at IS NULL OR julianday(s.opportunity_at)>julianday(u.subscribed_at,'unixepoch'))
-                        AND NOT EXISTS(SELECT 1 FROM user_deliveries d
-                            WHERE d.telegram_id=u.telegram_id AND d.item_key=s.item_key)
-                        ORDER BY s.eligible_at,s.item_key,u.telegram_id LIMIT ?""", (source,limit-len(rows))).fetchall())
-                self._conn.executemany("""INSERT INTO user_deliveries(telegram_id,item_key,status)
-                    VALUES(?,?,'pending') ON CONFLICT(telegram_id,item_key) DO UPDATE
-                    SET status='pending',reason='source_recovered' WHERE user_deliveries.status='suspended'""", rows)
-                remaining -= len(rows)
-                self._conn.execute("""INSERT INTO flags VALUES('queue_source_cursor',?)
-                    ON CONFLICT(name) DO UPDATE SET value=excluded.value""", (source,))
+            return stats
 
     def user_pending(self, now, limit=100, after_id=0):
         with self._lock:
@@ -364,6 +492,8 @@ class Database:
             self._conn.execute("""UPDATE user_deliveries SET status=?,reason=?,available_at=?,
                 telegram_message_id=COALESCE(?,telegram_message_id),sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END
                 WHERE id=?""", (state,reason,available_at,message_id,state,time.time(),delivery_id))
+            if state == 'pending':
+                self._put_flag('queue_dirty','1')
 
     def user_delivery_counts(self, telegram_id):
         with self._lock:
@@ -400,6 +530,8 @@ class Database:
             self._conn.execute("""UPDATE user_deliveries SET status=?,reason='operator_resolution',available_at=0,
                 sent_at=CASE WHEN ?='sent' THEN ? ELSE sent_at END WHERE telegram_id=? AND item_key=?""",
                 (mapping[outcome],outcome,time.time(),telegram_id,item_key))
+            if outcome == 'retry':
+                self._put_flag('queue_dirty','1')
 
     @staticmethod
     def serialize(item):
@@ -477,6 +609,7 @@ class Database:
             if inserted.rowcount and not baseline and category:
                 self._conn.execute("UPDATE seen_items SET eligible_at=? WHERE item_key=?",
                                    (eligible_at if eligible_at is not None else time.time(), item.item_key))
+                self._schedule_fanout(item.item_key)
             if category:
                 for alias in identities(item):
                     self._conn.execute("INSERT OR IGNORE INTO item_aliases VALUES(?,?)",(alias,item.item_key))
@@ -517,9 +650,15 @@ class Database:
                 observed = datetime.fromtimestamp(activate_at,timezone.utc).isoformat()
                 self._conn.execute("""UPDATE seen_items SET eligible_at=?,opportunity_at=?,baseline=0,notified=0
                     WHERE item_key=?""",(activate_at,observed,item.item_key))
-                self._conn.execute("""UPDATE user_deliveries SET status='suspended',reason='publication_reopened'
+                reopened = self._conn.execute("""UPDATE user_deliveries SET status='suspended',reason='publication_reopened'
                     WHERE item_key=? AND status='expired' AND telegram_id IN
                     (SELECT telegram_id FROM users WHERE is_active=1 AND subscribed_at<=?)""",(item.item_key,activate_at))
+                if reopened.rowcount:
+                    self._put_flag('queue_dirty','1')
+            if state != 'pending':
+                self._conn.execute('DELETE FROM delivery_fanout WHERE item_key=?',(item.item_key,))
+            elif activate_at is not None or first_detail:
+                self._schedule_fanout(item.item_key,reset=True)
 
     def item_row(self, item_key):
         with self._lock:
@@ -544,6 +683,10 @@ class Database:
             self._conn.execute("""UPDATE seen_items SET delivery_state=?,delivery_reason=?,
                 available_at=?,message_id=COALESCE(?,message_id),notified=CASE WHEN ?='sent' THEN 1 ELSE notified END
                 WHERE item_key=?""",(state,reason,available_at,message_id,state,item_key))
+            if state == 'pending':
+                self._schedule_fanout(item_key)
+            else:
+                self._conn.execute('DELETE FROM delivery_fanout WHERE item_key=?',(item_key,))
 
     def mark_notified(self, item_key):
         self.set_delivery(item_key,'sent','delivered')
@@ -591,6 +734,10 @@ class Database:
                 raise ValueError('Only uncertain, failed or legacy_review items can be resolved')
             self._conn.execute("UPDATE seen_items SET delivery_state=?,delivery_reason='operator_resolution',available_at=0,notified=? WHERE item_key=?",
                                (mapping[outcome],int(outcome=='sent'),item_key))
+            if outcome == 'retry':
+                self._schedule_fanout(item_key)
+            else:
+                self._conn.execute('DELETE FROM delivery_fanout WHERE item_key=?',(item_key,))
 
     def count_items(self) -> int:
         with self._lock:
