@@ -12,3 +12,7 @@ data/
 *.db.lock
 *.before-delivery-*.bak
 *.db-*
+
+backups/
+*.sqlite3
+*.sqlite3.part

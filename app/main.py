@@ -25,6 +25,7 @@ from app.collectors.website_http import WebsiteSnapshot
 from app.collectors.base import collection_scope, check_collection, CollectionCancelled, CollectionTimeout
 from app.config import Config, ConfigurationError
 from app.db import Database
+from app.backup import create_backup, BackupCancelled
 from app.filters import Filters
 from app.models import Item
 from app.notify import TelegramNotifier, BotAPIError
@@ -75,6 +76,7 @@ class Bot:
         self._website_failed = {}
         self._source_verify_after = {}
         self._source_locks = {}
+        self.backup_error = None
         try:
             self.db.migrate_owner(cfg.owner_id)
         except Exception:
@@ -645,6 +647,25 @@ class Bot:
         return {'attempted': len(checked_keys), 'successful': successful, 'found': found,
                 'matched': matched, 'new': new_count, 'sent': notified, 'errors': errors}
 
+    def _backup_loop(self, stop):
+        next_attempt = 0.0
+        while not stop.is_set():
+            now = time.time()
+            last = float(self.db.get_flag('last_backup_at','0'))
+            if now >= next_attempt and (now-last >= self.cfg.backup_interval_seconds or last > now):
+                try:
+                    create_backup(self.cfg.db_path,self.cfg.backup_dir,keep=self.cfg.backup_keep,stop=stop)
+                    self.db.set_flag('last_backup_at',str(time.time()))
+                    self.backup_error = None
+                    log.info('Плановая резервная копия SQLite проверена и сохранена')
+                except BackupCancelled:
+                    return
+                except Exception as exc:
+                    self.backup_error = type(exc).__name__
+                    log.error('Резервное копирование отложено (%s)',type(exc).__name__)
+                next_attempt = time.time()+min(300,self.cfg.backup_interval_seconds)
+            stop.wait(min(60,self.cfg.backup_interval_seconds))
+
     def _scan_loop(self, stop):
         next_scan = 0.0
         while not stop.is_set():
@@ -665,8 +686,10 @@ class Bot:
         self._background_collection = True
         scanner = threading.Thread(target=self._scan_loop,args=(stop,),daemon=True,name='collector')
         verifier = threading.Thread(target=self._verification_loop,args=(stop,),daemon=True,name='verifier')
-        scanner.start()
-        verifier.start()
+        workers = [scanner,verifier]
+        if self.cfg.backup_dir:
+            workers.append(threading.Thread(target=self._backup_loop,args=(stop,),daemon=True,name='backup'))
+        for worker in workers:worker.start()
         try:
             while not stop.is_set():
                 try:
@@ -676,8 +699,7 @@ class Bot:
                 stop.wait(2)
         finally:
             stop.set()
-            scanner.join()
-            verifier.join()
+            for worker in workers:worker.join()
             self._background_collection = False
 
 

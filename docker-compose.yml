@@ -8,6 +8,9 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Задайте TELEGRAM_BOT_TOKEN в .env или окружении}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:-0}
       DB_PATH: /data/bot.db
+      BACKUP_DIR: /backups
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-30}
       USER_AGENT: ${USER_AGENT:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36}
       ITEM_VERIFICATION_TTL_SECONDS: ${ITEM_VERIFICATION_TTL_SECONDS:-300}
@@ -15,6 +18,7 @@ services:
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-3600}
     volumes:
       - bot-data:/data
+      - ${BACKUP_HOST_PATH:-./backups}:/backups
 
 volumes:
   bot-data:

@@ -6,6 +6,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
+from pathlib import Path
 
 import yaml
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -78,6 +79,9 @@ class Config:
     rules: Rules
     source_timeout_seconds: int = 600
     item_verification_ttl_seconds: int = 300
+    backup_dir: str = ""
+    backup_interval_seconds: int = 86400
+    backup_keep: int = 7
 
     def validate_runtime(self) -> None:
         """Validate startup credentials without contacting Telegram or echoing values."""
@@ -169,10 +173,14 @@ class Config:
         if "FIRST_RUN_LOOKBACK_HOURS" in os.environ:
             logging.getLogger(__name__).warning(
                 "FIRST_RUN_LOOKBACK_HOURS удалён и игнорируется; начальный снимок сохраняется как baseline.")
+        db_path = os.environ.get("DB_PATH", "/data/bot.db")
+        backup_dir = os.environ.get("BACKUP_DIR", "")
+        if backup_dir and (not backup_dir.strip() or Path(backup_dir).resolve().is_relative_to(Path(db_path).resolve().parent)):
+            raise ConfigurationError("BACKUP_DIR должен быть вне каталога DB_PATH.")
         return Config(
             bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
             owner_id=Config._env_int("OWNER_TELEGRAM_ID", "0", minimum=0),
-            db_path=os.environ.get("DB_PATH", "/data/bot.db"),
+            db_path=db_path,
             poll_interval_seconds=Config._env_int("POLL_INTERVAL_SECONDS", "3600"),
             request_timeout_seconds=Config._env_int("REQUEST_TIMEOUT_SECONDS", str(DEFAULT_REQUEST_TIMEOUT)),
             user_agent=user_agent,
@@ -181,4 +189,7 @@ class Config:
             rules=rules,
             source_timeout_seconds=Config._env_int("SOURCE_TIMEOUT_SECONDS", "600"),
             item_verification_ttl_seconds=Config._env_int("ITEM_VERIFICATION_TTL_SECONDS", "300"),
+            backup_dir=backup_dir,
+            backup_interval_seconds=Config._env_int("BACKUP_INTERVAL_SECONDS", "86400"),
+            backup_keep=Config._env_int("BACKUP_KEEP", "7",minimum=2),
         )
