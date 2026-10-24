@@ -118,11 +118,18 @@ class Database:
                 self._conn.execute("CREATE INDEX IF NOT EXISTS idx_delivery_state ON seen_items(delivery_state,available_at)")
                 # Backfill strong public URL identities for old accepted rows;
                 # titles alone must never suppress another company's vacancy.
-                for row in self._conn.execute("SELECT * FROM seen_items WHERE payload IS NULL AND category IS NOT NULL").fetchall():
-                    old = Item(row['source_key'],row['source_key'],row['external_id'],row['url'] or '',
-                               row['title'] or '',row['summary'] or '',row['apply_url'],None)
-                    for alias in identities(old):
-                        self._conn.execute("INSERT OR IGNORE INTO item_aliases VALUES(?,?)",(alias,row['item_key']))
+                if self._flag('legacy_aliases_backfilled','') != '1':
+                    legacy = self._conn.execute("SELECT * FROM seen_items WHERE payload IS NULL AND category IS NOT NULL")
+                    while True:
+                        rows = legacy.fetchmany(500)
+                        if not rows:
+                            break
+                        for row in rows:
+                            old = Item(row['source_key'],row['source_key'],row['external_id'],row['url'] or '',
+                                       row['title'] or '',row['summary'] or '',row['apply_url'],None)
+                            for alias in identities(old):
+                                self._conn.execute("INSERT OR IGNORE INTO item_aliases VALUES(?,?)",(alias,row['item_key']))
+                    self._put_flag('legacy_aliases_backfilled','1')
                 self._conn.execute("""CREATE TABLE IF NOT EXISTS users (
                     telegram_id INTEGER PRIMARY KEY, username TEXT,
                     is_active INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0,1)),
