@@ -61,6 +61,8 @@ class Bot:
         self._fresh_items = {}
         self._available_sources = set()
         self._last_scan = 0.0
+        self._background_collection = False
+        self._sent_total = 0
         try:
             self.db.migrate_owner(cfg.owner_id)
         except Exception:
@@ -324,6 +326,7 @@ class Bot:
             with self._lock:
                 if result.status == 'sent':
                     self.db.finish_user_delivery(row['id'],'sent','delivered',message_id=result.message_id)
+                    self._sent_total += 1
                     return True
                 if result.status == 'retry':
                     current = self.db.user(telegram_id)
@@ -413,6 +416,7 @@ class Bot:
     def _run_cycle(self):
         started = datetime.now(timezone.utc)
         found = new_count = notified = 0
+        sent_before = self._sent_total
         errors: list[str] = []
         checked_keys = []
         successful = matched = 0
@@ -505,7 +509,9 @@ class Bot:
             found += n_found
             new_count += n_new
 
-        notified = self.dispatch_pending()
+        if not self._background_collection:
+            self.dispatch_pending()
+        notified = self._sent_total-sent_before
 
         # состояние ошибок источников
         for key in checked_keys:
@@ -520,22 +526,37 @@ class Bot:
         return {'attempted': len(checked_keys), 'successful': successful, 'found': found,
                 'matched': matched, 'new': new_count, 'sent': notified, 'errors': errors}
 
-    def loop(self, stop):
-        next_scan=0.0
+    def _scan_loop(self, stop):
+        next_scan = 0.0
         while not stop.is_set():
-            try:
-                if self.scan_requested.is_set():
-                    self.scan_requested.clear()
-                    next_scan=0.0
-                if time.monotonic() >= next_scan:
+            if self.scan_requested.is_set():
+                self.scan_requested.clear()
+                next_scan = 0.0
+            if time.monotonic() >= next_scan:
+                try:
                     self.run_cycle()
-                    next_scan=time.monotonic()+self.cfg.poll_interval_seconds
-                else:
+                except Exception:
+                    log.exception("Ошибка сбора; состояние источников сохранено")
+                next_scan = time.monotonic()+self.cfg.poll_interval_seconds
+            stop.wait(0.2)
+
+    def loop(self, stop):
+        # Only the scanner collects full snapshots. The calling thread services
+        # the durable outboxes while a source is waiting on network I/O.
+        self._background_collection = True
+        scanner = threading.Thread(target=self._scan_loop,args=(stop,),daemon=True,name='collector')
+        scanner.start()
+        try:
+            while not stop.is_set():
+                try:
                     self.dispatch_pending()
-            except Exception:
-                log.exception("Ошибка цикла; состояние очереди сохранено")
-                next_scan=time.monotonic()+self.cfg.poll_interval_seconds
-            stop.wait(2)
+                except Exception:
+                    log.exception("Ошибка доставки; состояние очереди сохранено")
+                stop.wait(2)
+        finally:
+            stop.set()
+            scanner.join()
+            self._background_collection = False
 
 
 HELP = ("/start — включить уведомления\n/status — состояние подписки\n"
