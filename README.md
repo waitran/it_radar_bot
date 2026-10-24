@@ -7,7 +7,10 @@
 Бот отслеживает публичные источники, отбирает подходящие возможности<br>
 и отправляет каждому подписчику новые публикации без рассылки архива.
 
-**Python 3.12 · Telegram Bot API · SQLite · Docker Compose**
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
+![SQLite](https://img.shields.io/badge/Storage-SQLite-003B57)
+![Status](https://img.shields.io/badge/Status-Working%20prototype-2ea44f)
 
 [Открыть бота](https://t.me/it_start_radar_bot) · [Быстрый старт](#быстрый-старт) · [Обновление](#обновление-существующей-установки) · [Документация](#документация)
 
@@ -85,6 +88,13 @@
 Нужны Docker с Docker Compose и токен бота от [@BotFather](https://t.me/BotFather).
 
 ### 1. Подготовьте окружение
+
+Если репозиторий ещё не загружен, клонируйте его (для приватного репозитория потребуется доступ):
+
+```bash
+git clone https://github.com/waitran/it_radar_bot.git
+cd it_radar_bot
+```
 
 В каталоге репозитория:
 
@@ -185,6 +195,18 @@ pending → sending → sent
 
 SQLite Backup API обеспечивает резервирование при миграции. Файловая блокировка защищает от второго процесса на той же базе; сохранённый ID бота предотвращает случайное использование базы другим Telegram-ботом.
 
+## Технологии
+
+| Компонент | Используется |
+| :--- | :--- |
+| Язык | Python 3.12 |
+| HTTP и HTML | `requests`, `BeautifulSoup` |
+| Конфигурация | YAML, переменные окружения |
+| Хранение | SQLite |
+| Развёртывание | Docker, Docker Compose |
+| Интеграция | Telegram Bot API |
+| Тесты | `unittest`, отдельные проверки правил |
+
 ## Разработка и проверки
 
 Целевая среда — **Python 3.12.12 / Debian Bookworm**. Базовый Docker-образ закреплён digest, прямые и транзитивные зависимости — точными версиями в [`requirements.txt`](requirements.txt).
@@ -233,6 +255,13 @@ python -m app.main
 
 </details>
 
+## Ограничения
+
+Мониторинг выполняется локально: если компьютер выключен или спит, сбор останавливается.
+Изображения не распознаются OCR, а доступность внешних регистрационных форм не гарантируется.
+Mini App и веб-приложение пока не реализованы; для них планируется общий API с проверкой
+данных инициализации Telegram для Mini App.
+
 ## Документация
 
 | Руководство | Содержание |
@@ -257,3 +286,7 @@ python -m app.main
 - [ ] Пользовательские настройки категорий и источников
 - [ ] Telegram Mini App для просмотра возможностей и управления предпочтениями
 - [ ] Веб-приложение
+
+## Автор
+
+**[waitran](https://github.com/waitran)** — pet-проект для практики Python-разработки, автоматизации, интеграций и эксплуатации контейнеризованных сервисов.
