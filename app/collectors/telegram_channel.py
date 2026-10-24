@@ -197,7 +197,13 @@ def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int 
             identifier = int(item.external_id)
             if since_id is None or identifier > since_id or (include_recent and page == 0):
                 results.setdefault(identifier, item)
-        if since_id is None or oldest <= since_id or next_before is None:
+        if since_id is not None and oldest > since_id and next_before is None:
+            latest = max(int(item.external_id) for item in items)
+            raise TelegramSourceError(
+                f'Полнота истории не подтверждена: граница {since_id} не достигнута, '
+                f'пагинация отсутствует; страница {oldest}–{latest}. Курсор сохранён. '
+                'Если старая история удалена, требуется явное принятие пропуска оператором.')
+        if since_id is None or oldest <= since_id:
             log.info("channel %s: %d posts, %d pages", username, len(results), page + 1)
             return [results[key] for key in sorted(results)]
         before = next_before

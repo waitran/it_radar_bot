@@ -768,6 +768,17 @@ class Database:
             raise ValueError("Invalid Telegram cursor")
         self.set_flag("telegram_cursor:" + source_key, str(value) if value is not None else "initializing")
 
+    def accept_telegram_gap(self, source_key, through_id):
+        """Offline operator action: record an explicit forward-only history gap."""
+        with self._lock, self._conn:
+            prior = self._flag('telegram_cursor:'+source_key,'initializing')
+            if (prior == 'initializing' or type(through_id) is not int
+                    or through_id <= int(prior)):
+                raise ValueError('Укажите ID больше существующего сохранённого курсора')
+            self._put_flag('telegram_cursor:'+source_key,through_id)
+            self._put_flag('telegram_gap:'+source_key,json.dumps(
+                dict(previous=int(prior),through=through_id,accepted_at=time.time())))
+
     def source_initialized(self, source_key: str) -> bool:
         with self._lock:
             row = self._conn.execute(

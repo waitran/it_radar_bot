@@ -85,7 +85,7 @@ with tempfile.TemporaryDirectory() as directory,patch.dict(os.environ,{},clear=T
     except Exception as exc:error=type(exc).__name__
     results['invalid_label_accepted']={'config_passes':True,'check_config_exit_code':checked.returncode,'item_accepted':accepted,'format_error':error}
 # A markup change can preserve post parsing while hiding the pagination link.
-from app.collectors.telegram_channel import fetch_channel
+from app.collectors.telegram_channel import fetch_channel, TelegramSourceError
 html = ''.join(
     f'<div class="tgme_widget_message_wrap"><div class="tgme_widget_message" data-post="example/{identifier}">'
     '<a class="tgme_widget_message_date"><time datetime="2026-10-25T10:00:00Z"></time></a>'
@@ -94,9 +94,14 @@ html = ''.join(
 html += '<a class="changed-pagination" data-before="100" href="/s/example?before=100">Older</a>'
 response = requests.Response();response.status_code=200;response._content=html.encode();response.encoding='utf-8'
 with patch('app.collectors.telegram_channel.http_get',return_value=response) as get:
-    entries = fetch_channel('example',since_id=1)
+    try:
+        entries = fetch_channel('example',since_id=1)
+        history_error = None
+    except TelegramSourceError as exc:
+        entries = []
+        history_error = str(exc)
 results['incomplete_history_accepted'] = {'saved_boundary':1,'accepted_ids':[int(entry.external_id) for entry in entries],
-    'http_calls':get.call_count,'older_link_present_with_changed_class':True}
+    'http_calls':get.call_count,'older_link_present_with_changed_class':True,'error':history_error}
 with tempfile.TemporaryDirectory() as directory,patch.dict(os.environ,{},clear=True):
     cfg=Config.load(str(ROOT/'config.yaml'));cfg.db_path=str(Path(directory)/'state.db');cfg.owner_id=0
     cfg.channels=[TelegramChannelSource('example','example')];cfg.websites=[]

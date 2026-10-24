@@ -426,7 +426,7 @@ class Bot:
         self._last_scan = time.time()
         self._cycle_started = started.timestamp()
 
-        def handle_source(key: str, items: list[Item], *, initial_snapshot: bool = False) -> tuple[int, int]:
+        def handle_source(key: str, items: list[Item], *, initial_snapshot: bool = False, known_cursor=None) -> tuple[int, int]:
             nonlocal matched
             first = not self.db.source_initialized(key)
             # Undated website publications need a successful personal baseline:
@@ -442,7 +442,8 @@ class Bot:
                 self._fresh_items[it.item_key]=it
                 with self._lock:
                     already_seen = self.db.exists(it.item_key)
-                    baseline = initial_snapshot
+                    baseline = initial_snapshot or (known_cursor is not None and not already_seen
+                                                    and int(it.external_id) <= known_cursor)
                     became_eligible = self.process_item(it,baseline=baseline)
                     if became_eligible:
                         new_items+=1
@@ -469,7 +470,7 @@ class Bot:
                 self.db.save_telegram_cursor(source_key, cursor)
                 with self._collection_scope():
                     items = telegram_channel.fetch_channel(ch.username, since_id=cursor, max_pages=ch.max_pages, include_recent=True)
-                    n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None)
+                    n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None, known_cursor=cursor)
                     if items:
                         self.db.save_telegram_cursor(source_key, max(cursor or 0, max(int(it.external_id) for it in items)))
                     self.db.set_source_state(ch.key, error="")
@@ -649,15 +650,19 @@ def main() -> None:
     parser.add_argument("--resolve-item", help="Ключ записи очереди для ручного разбора")
     parser.add_argument("--resolution", choices=["sent","retry","skip"])
     parser.add_argument("--allow-duplicate-risk", action="store_true", help="Подтвердить риск дубля при ручном повторе неизвестной доставки")
+    parser.add_argument('--accept-telegram-gap', metavar='USERNAME', help='Принять пропуск удалённой истории в остановленной БД; без сети')
+    parser.add_argument('--through-id', type=int, help='Последний ID сознательно пропускаемой истории')
     args = parser.parse_args()
+    if bool(args.accept_telegram_gap) != (args.through_id is not None):
+        parser.error('--accept-telegram-gap и --through-id задаются вместе')
     if bool(args.resolve_item) != bool(args.resolution):
         parser.error("--resolve-item и --resolution задаются вместе")
-    if sum(bool(x) for x in (args.check_config,args.delivery_status,args.resolve_item)) > 1:
+    if sum(bool(x) for x in (args.check_config,args.delivery_status,args.resolve_item,args.accept_telegram_gap)) > 1:
         parser.error("Выберите один режим диагностики")
     configure_logging()
     try:
         cfg = Config.load()
-        if not args.delivery_status and not args.resolve_item:
+        if not args.delivery_status and not args.resolve_item and not args.accept_telegram_gap:
             cfg.validate_runtime()
     except ConfigurationError as exc:
         log.error("Ошибка конфигурации: %s", exc)
@@ -669,11 +674,18 @@ def main() -> None:
     if args.check_config:
         log.info("Конфигурация корректна; сеть и база данных не использовались.")
         return
-    if args.delivery_status or args.resolve_item:
+    if args.delivery_status or args.resolve_item or args.accept_telegram_gap:
         if not Path(cfg.db_path).is_file():
             raise RuntimeError("Database does not exist; set DB_PATH")
         db=Database(cfg.db_path)
         try:
+            if args.accept_telegram_gap:
+                names = {channel.username.lower() for channel in cfg.channels}
+                if args.accept_telegram_gap.lower() not in names:
+                    raise ValueError('Укажите username настроенного Telegram-источника')
+                db.accept_telegram_gap('tg_'+args.accept_telegram_gap.lower(),args.through_id)
+                log.info('Пропуск истории явно принят; сообщения не отправлялись.')
+                return
             if args.resolve_item:
                 if args.telegram_id is not None:
                     db.resolve_user_delivery(args.telegram_id,args.resolve_item,args.resolution,args.allow_duplicate_risk)

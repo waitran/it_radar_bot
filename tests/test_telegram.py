@@ -146,7 +146,7 @@ class TelegramPaginationTests(unittest.TestCase):
         self.assertEqual(get.call_args_list[2].args[0], 'https://t.me/s/example?before=6')
 
     def test_deleted_watermark_and_end_of_history(self):
-        for html in [page([7, 9], before=7), page([9])]:
+        for html in [page([7, 9], before=7), page([7, 9])]:
             with patch('app.collectors.telegram_channel.http_get', return_value=response(html)):
                 result = fetch_channel('example', since_id=8)
             self.assertEqual([i.external_id for i in result], ['9'])
