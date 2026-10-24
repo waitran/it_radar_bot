@@ -424,7 +424,7 @@ class DedupAndFormatTests(unittest.TestCase):
         with patch('app.collectors.telegram_channel.http_get',return_value=response(page([1,2]))) as get:
             result=fetch_post('example',2)
         self.assertEqual(result.external_id,'2')
-        get.assert_called_once_with('https://t.me/s/example?before=3',allow_redirects=False)
+        get.assert_called_once_with('https://t.me/s/example?before=3',allow_redirects=False, max_bytes=8_000_000)
 
     def test_refresh_accepts_real_forward_pagination_without_following(self):
         html=page([1,2])+'<a class="tme_messages_more js-messages_more" data-after="2" href="/s/example?after=2"></a>'

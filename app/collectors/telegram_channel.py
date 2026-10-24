@@ -177,7 +177,7 @@ def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int 
         check_collection()
         url = base if before is None else f"{base}?before={before}"
         try:
-            response = http_get(url, allow_redirects=False)
+            response = http_get(url, allow_redirects=False, max_bytes=8_000_000)
         except requests.HTTPError as exc:
             status = exc.response.status_code if exc.response is not None else "unknown"
             raise TelegramSourceError(f"Telegram HTTP {status}; обход ограничений не выполняется.") from None
@@ -210,7 +210,7 @@ def fetch_post(username: str, post_id: int) -> Item | None:
     if not USERNAME.fullmatch(username) or type(post_id) is not int or post_id < 1:
         raise TelegramSourceError('Некорректный ID для повторной проверки.')
     try:
-        response = http_get(f'https://t.me/s/{username}?before={post_id + 1}', allow_redirects=False)
+        response = http_get(f'https://t.me/s/{username}?before={post_id + 1}', allow_redirects=False, max_bytes=8_000_000)
     except requests.RequestException as exc:
         raise TelegramSourceError(f'Повторная проверка Telegram: {type(exc).__name__}.') from None
     check_collection()

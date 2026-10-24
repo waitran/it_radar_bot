@@ -54,7 +54,7 @@ class CollectionControlTests(unittest.TestCase):
 
     def test_inflight_request_timeout_uses_remaining_budget(self):
         with patch('app.collectors.base._last_request_at',0), \
-             patch('app.collectors.base.requests.get',return_value=Mock()) as get:
+             patch('app.collectors.base.requests.get',return_value=Mock(status_code=200, headers={}, raw=Mock(stream=Mock(return_value=iter(()))))) as get:
             with collection_scope(budget=8): http_get('https://example.test')
             self.assertGreater(get.call_args.kwargs['timeout'],0)
             self.assertLessEqual(get.call_args.kwargs['timeout'],4)

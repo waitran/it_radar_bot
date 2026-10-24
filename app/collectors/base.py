@@ -6,8 +6,10 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 import time
+import zlib
 
 import requests
+from urllib3.exceptions import HTTPError as UrllibHTTPError
 
 log = logging.getLogger("collectors")
 
@@ -83,45 +85,104 @@ def _pace():
     check_collection()
 
 
+class ResponseLimitError(requests.RequestException):
+    """An untrusted source response cannot be safely buffered."""
+
+
+def _chunks(raw):
+    # urllib3 2.x read1 returns available data without waiting to fill 8 KiB.
+    # Older runtimes use stream; both retain the socket read timeout.
+    if hasattr(type(raw), 'read1'):
+        while True:
+            check_collection()
+            chunk = raw.read1(8192, decode_content=False)
+            if not chunk:
+                return
+            yield chunk
+    else:
+        yield from raw.stream(8192, decode_content=False)
+
+
+def _read_response(response, max_bytes):
+    # Read encoded chunks ourselves: automatic decompression may allocate an
+    # arbitrarily large output before iter_content yields its first chunk.
+    try:
+        check_collection()
+        response.raise_for_status()
+        if response.status_code != 200:
+            # Leave the body unconsumed so close() discards this connection.
+            return response
+        encoding = response.headers.get('Content-Encoding', 'identity').lower().strip()
+        if encoding not in ('identity', '', 'gzip', 'deflate'):
+            raise ResponseLimitError('Неподдерживаемое сжатие ответа источника')
+        decoder = (zlib.decompressobj(31 if encoding == 'gzip' else zlib.MAX_WBITS)
+                   if encoding in ('gzip', 'deflate') else None)
+        length = response.headers.get('Content-Length')
+        if length is not None:
+            try:
+                length = int(length)
+            except ValueError:
+                raise ResponseLimitError('Некорректный размер ответа') from None
+            if length < 0 or length > max_bytes:
+                raise ResponseLimitError('Ответ источника превышает лимит')
+        body = bytearray()
+        wire_size = 0
+        for chunk in _chunks(response.raw):
+            check_collection()
+            wire_size += len(chunk)
+            if wire_size > max_bytes:
+                raise ResponseLimitError('Ответ источника превышает лимит')
+            try:
+                decoded = decoder.decompress(chunk, max_bytes-len(body)+1) if decoder else chunk
+            except zlib.error:
+                raise ResponseLimitError('Повреждённый сжатый ответ') from None
+            body.extend(decoded)
+            if len(body) > max_bytes:
+                raise ResponseLimitError('Ответ источника превышает лимит')
+            if decoder and decoder.unused_data:
+                raise ResponseLimitError('Лишние данные после сжатого ответа')
+            check_collection()
+        if length is not None and wire_size != length:
+            raise ResponseLimitError('Неполный ответ источника')
+        if decoder and not decoder.eof:
+            raise ResponseLimitError('Неполный сжатый ответ')
+        check_collection()
+        response._content = bytes(body)
+        response._content_consumed = True
+        return response
+    except UrllibHTTPError:
+        raise requests.RequestException('Ошибка чтения ответа источника') from None
+    finally:
+        response.close()
+
+
 def http_get(url: str, *, timeout: int = 25, headers: dict | None = None,
-             allow_redirects: bool = True) -> requests.Response:
+             allow_redirects: bool = False, max_bytes: int = 12_000_000) -> requests.Response:
     global _last_request_at
     _pace()
-    # requests applies its timeout separately to connect/read; bound both against
-    # the remaining source budget. An in-flight request still uses network timeouts.
     timeout = min(timeout,check_collection()/2)
-    h = {"User-Agent": USER_AGENT, "Accept-Language": "ru,en;q=0.8"}
+    h = {"User-Agent": USER_AGENT, "Accept-Language": "ru,en;q=0.8",
+         "Accept-Encoding": "gzip, deflate"}
     if headers:
         h.update(headers)
-    resp = None
     try:
-        resp = requests.get(url, timeout=timeout, headers=h, allow_redirects=allow_redirects)
-        check_collection()
-    except (CollectionCancelled,CollectionTimeout):
-        if resp is not None:
-            resp.close()
-        raise
+        response = requests.get(url, timeout=timeout, headers=h,
+                                allow_redirects=allow_redirects, stream=True)
+        return _read_response(response, max_bytes)
     finally:
         _last_request_at = time.monotonic()
-    resp.raise_for_status()
-    return resp
 
 
-def http_post_json(url: str, payload: dict, *, timeout: int = 25) -> requests.Response:
-    """Public read APIs that use POST; shares pacing and cancellation with GET."""
+def http_post_json(url: str, payload: dict, *, timeout: int = 25,
+                   max_bytes: int = 12_000_000) -> requests.Response:
+    """Public read APIs that use POST; shares bounded buffering with GET."""
     global _last_request_at
     _pace()
     timeout = min(timeout,check_collection()/2)
-    resp = None
     try:
-        resp = requests.post(url, json=payload, timeout=timeout,
-                             headers={"User-Agent": USER_AGENT}, allow_redirects=False)
-        check_collection()
-    except (CollectionCancelled,CollectionTimeout):
-        if resp is not None:
-            resp.close()
-        raise
+        response = requests.post(url, json=payload, timeout=timeout, stream=True,
+                                 headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"},
+                                 allow_redirects=False)
+        return _read_response(response, max_bytes)
     finally:
         _last_request_at = time.monotonic()
-    resp.raise_for_status()
-    return resp

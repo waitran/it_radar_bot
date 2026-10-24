@@ -132,7 +132,7 @@ class TelegramPaginationTests(unittest.TestCase):
         with patch('app.collectors.telegram_channel.http_get', return_value=response(page([12, 10, 11], before=10))) as get:
             result = fetch_channel('example')
         self.assertEqual([i.external_id for i in result], ['10', '11', '12'])
-        get.assert_called_once_with('https://t.me/s/example', allow_redirects=False)
+        get.assert_called_once_with('https://t.me/s/example', allow_redirects=False, max_bytes=8_000_000)
 
     def test_multiple_pages_with_overlap_and_watermark(self):
         with patch('app.collectors.telegram_channel.http_get', side_effect=[
