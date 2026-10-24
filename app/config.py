@@ -2,12 +2,20 @@
 from __future__ import annotations
 
 import os
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 import yaml
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+
+DEFAULT_REQUEST_TIMEOUT = 30
+DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0 Safari/537.36"
+)
 
 
 class ConfigurationError(ValueError):
@@ -68,7 +76,6 @@ class Config:
     channels: list[TelegramChannelSource]
     websites: list[HttpSource]
     rules: Rules
-    first_run_lookback_hours: int = 72
     source_timeout_seconds: int = 600
 
     def validate_runtime(self) -> None:
@@ -151,19 +158,22 @@ class Config:
             timezone=rules_raw.get("timezone", "Europe/Moscow"),
             require_it_context=rules_raw.get("require_it_context", True),
         )
+        user_agent = os.environ.get("USER_AGENT", DEFAULT_USER_AGENT)
+        if (not user_agent.strip() or user_agent.startswith(" ") or len(user_agent) > 512
+                or any(ord(char) < 32 or ord(char) > 126 for char in user_agent)):
+            raise ConfigurationError("USER_AGENT должен содержать от 1 до 512 печатных ASCII-символов.")
+        if "FIRST_RUN_LOOKBACK_HOURS" in os.environ:
+            logging.getLogger(__name__).warning(
+                "FIRST_RUN_LOOKBACK_HOURS удалён и игнорируется; начальный снимок сохраняется как baseline.")
         return Config(
             bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
             owner_id=Config._env_int("OWNER_TELEGRAM_ID", "0", minimum=0),
             db_path=os.environ.get("DB_PATH", "/data/bot.db"),
             poll_interval_seconds=Config._env_int("POLL_INTERVAL_SECONDS", "3600"),
-            request_timeout_seconds=Config._env_int("REQUEST_TIMEOUT_SECONDS", "30"),
-            user_agent=os.environ.get(
-                "USER_AGENT",
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-            ),
+            request_timeout_seconds=Config._env_int("REQUEST_TIMEOUT_SECONDS", str(DEFAULT_REQUEST_TIMEOUT)),
+            user_agent=user_agent,
             channels=channels,
             websites=websites,
             rules=rules,
             source_timeout_seconds=Config._env_int("SOURCE_TIMEOUT_SECONDS", "600"),
-            first_run_lookback_hours=Config._env_int("FIRST_RUN_LOOKBACK_HOURS", "72", minimum=0),
         )

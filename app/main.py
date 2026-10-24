@@ -215,10 +215,16 @@ class Bot:
                     self.db.set_flag("check_in_progress", "0")
                 self._scan_running = False
 
+    def _collection_scope(self):
+        # Context-local settings follow nested collectors without mutable globals.
+        return collection_scope(self.stop_event, budget=self.cfg.source_timeout_seconds,
+                                request_timeout=self.cfg.request_timeout_seconds,
+                                user_agent=self.cfg.user_agent)
+
     # ---------- сбор одного источника ----------
     def collect_source(self, key: str, name: str, fetch) -> list[Item] | None:
         try:
-            with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
+            with self._collection_scope():
                 items = fetch()
                 check_collection()
             self.db.set_source_state(key, error=items.error_summary if isinstance(items,WebsiteSnapshot) else '')
@@ -368,7 +374,7 @@ class Bot:
             source=sources[row["source_key"]]
             if current is None and source.type=="telegram_channel":
                 try:
-                    with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
+                    with self._collection_scope():
                         current=telegram_channel.fetch_post(source.username,int(row["external_id"]))
                 except CollectionCancelled:
                     return sent
@@ -457,7 +463,7 @@ class Bot:
                 # Persist the legacy boundary before processing, so a crash partway
                 # through ingestion cannot turn a partial batch into a new cursor.
                 self.db.save_telegram_cursor(source_key, cursor)
-                with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
+                with self._collection_scope():
                     items = telegram_channel.fetch_channel(ch.username, since_id=cursor, max_pages=ch.max_pages, include_recent=True)
                     n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None)
                     if items:
@@ -484,7 +490,7 @@ class Bot:
                 continue
             collector = cls(w)
             try:
-                with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
+                with self._collection_scope():
                     items = self.collect_source(w.key, w.name, collector.fetch)
                     if items is None:
                         continue

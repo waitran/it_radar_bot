@@ -11,12 +11,9 @@ import zlib
 import requests
 from urllib3.exceptions import HTTPError as UrllibHTTPError
 
-log = logging.getLogger("collectors")
+from app.config import DEFAULT_REQUEST_TIMEOUT, DEFAULT_USER_AGENT
 
-USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0 Safari/537.36 it-radar-bot/1.0"
-)
+log = logging.getLogger("collectors")
 
 # Между запросами к любому источнику выдерживаем паузу — соблюдаем разумную частоту.
 _MIN_INTERVAL = 2.0
@@ -32,6 +29,7 @@ class CollectionTimeout(RuntimeError):
 
 
 _control = ContextVar('collection_control', default=None)
+_http_settings = ContextVar('collection_http_settings', default=(DEFAULT_REQUEST_TIMEOUT, DEFAULT_USER_AGENT))
 
 
 def check_collection():
@@ -48,7 +46,7 @@ def check_collection():
 
 
 @contextmanager
-def collection_scope(stop=None, *, budget=600):
+def collection_scope(stop=None, *, budget=600, request_timeout=None, user_agent=None):
     # Nested collector/helper calls share the outer source's deadline.
     if _control.get() is not None:
         check_collection()
@@ -56,11 +54,16 @@ def collection_scope(stop=None, *, budget=600):
         check_collection()
         return
     token = _control.set((stop,time.monotonic()+budget))
+    current_timeout, current_agent = _http_settings.get()
+    settings_token = _http_settings.set((
+        current_timeout if request_timeout is None else request_timeout,
+        current_agent if user_agent is None else user_agent))
     try:
         check_collection()
         yield
         check_collection()
     finally:
+        _http_settings.reset(settings_token)
         _control.reset(token)
 
 
@@ -156,12 +159,13 @@ def _read_response(response, max_bytes):
         response.close()
 
 
-def http_get(url: str, *, timeout: int = 25, headers: dict | None = None,
+def http_get(url: str, *, timeout: int | None = None, headers: dict | None = None,
              allow_redirects: bool = False, max_bytes: int = 12_000_000) -> requests.Response:
     global _last_request_at
     _pace()
-    timeout = min(timeout,check_collection()/2)
-    h = {"User-Agent": USER_AGENT, "Accept-Language": "ru,en;q=0.8",
+    configured_timeout, user_agent = _http_settings.get()
+    timeout = min(configured_timeout if timeout is None else timeout,check_collection()/2)
+    h = {"User-Agent": user_agent, "Accept-Language": "ru,en;q=0.8",
          "Accept-Encoding": "gzip, deflate"}
     if headers:
         h.update(headers)
@@ -173,15 +177,16 @@ def http_get(url: str, *, timeout: int = 25, headers: dict | None = None,
         _last_request_at = time.monotonic()
 
 
-def http_post_json(url: str, payload: dict, *, timeout: int = 25,
+def http_post_json(url: str, payload: dict, *, timeout: int | None = None,
                    max_bytes: int = 12_000_000) -> requests.Response:
     """Public read APIs that use POST; shares bounded buffering with GET."""
     global _last_request_at
     _pace()
-    timeout = min(timeout,check_collection()/2)
+    configured_timeout, user_agent = _http_settings.get()
+    timeout = min(configured_timeout if timeout is None else timeout,check_collection()/2)
     try:
         response = requests.post(url, json=payload, timeout=timeout, stream=True,
-                                 headers={"User-Agent": USER_AGENT, "Accept-Encoding": "gzip, deflate"},
+                                 headers={"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"},
                                  allow_redirects=False)
         return _read_response(response, max_bytes)
     finally:

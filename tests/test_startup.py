@@ -58,7 +58,7 @@ class StartupTests(unittest.TestCase):
         self.assertEqual(cfg.owner_id, 0)
 
     def test_invalid_numbers_are_safe(self):
-        for name in ["POLL_INTERVAL_SECONDS", "REQUEST_TIMEOUT_SECONDS", "FIRST_RUN_LOOKBACK_HOURS"]:
+        for name in ["POLL_INTERVAL_SECONDS", "REQUEST_TIMEOUT_SECONDS"]:
             for value in ["private-invalid-input", "-1"]:
                 with self.subTest(name=name):
                     with self.assertRaises(ConfigurationError) as exc:
