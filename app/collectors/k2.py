@@ -4,6 +4,7 @@ from urllib.parse import urlencode, urlsplit
 
 from bs4 import BeautifulSoup
 
+from app.collectors.base import check_collection, collection_task
 from app.collectors.website_http import WebsiteSourceError, read_text, read_json, text, same_host_url, job_dates
 from app.models import Item
 
@@ -17,6 +18,7 @@ class K2Collector:
     def __init__(self, source):
         self.source = source
 
+    @collection_task
     def fetch(self) -> list[Item]:
         url = same_host_url(self.source.url, self.source.url, self.HOST)
         html = read_text(url)
@@ -28,6 +30,7 @@ class K2Collector:
         page, seen_pages, products = '1', set(), {}
         total = None
         while page:
+            check_collection()
             if page in seen_pages or len(seen_pages) >= self.source.max_pages:
                 raise WebsiteSourceError('К2: повтор страницы или лимит max_pages; частичная выдача отклонена.')
             seen_pages.add(page)
@@ -58,6 +61,7 @@ class K2Collector:
             raise WebsiteSourceError('К2: получен неполный каталог вакансий.')
         items, seen_urls = [], set()
         for product in products.values():
+            check_collection()
             target = product.get('url') or product.get('buttonlink')
             if not target:
                 raise WebsiteSourceError('К2: отсутствует ссылка вакансии.')
@@ -89,4 +93,5 @@ class K2Collector:
                 published_at=published, deadline=deadline, registration_status='unknown',
                 kind='vacancy',
             ))
+        check_collection()
         return items

@@ -5,6 +5,7 @@ Never read those collections or use embedded credentials to bypass API access.
 """
 from bs4 import BeautifulSoup
 
+from app.collectors.base import check_collection, collection_task
 from app.collectors.website_http import WebsiteSourceError, read_text, same_host_url
 
 
@@ -15,10 +16,12 @@ class RtkitCollector:
     def __init__(self, source):
         self.source = source
 
+    @collection_task
     def fetch(self):
         url = same_host_url(self.source.url, self.source.url, 'rtkit.ru')
         if BeautifulSoup(read_text(url), 'html.parser').select_one('app-root') is None:
             raise WebsiteSourceError('РТК ИТ не подключён: изменилась публичная страница, нужна проверка интеграции.')
+        check_collection()
         try:
             read_text(self.API, post=True)
         except WebsiteSourceError as exc:

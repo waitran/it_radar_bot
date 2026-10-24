@@ -69,6 +69,7 @@ class Config:
     websites: list[HttpSource]
     rules: Rules
     first_run_lookback_hours: int = 72
+    source_timeout_seconds: int = 600
 
     def validate_runtime(self) -> None:
         """Validate startup credentials without contacting Telegram or echoing values."""
@@ -163,5 +164,6 @@ class Config:
             channels=channels,
             websites=websites,
             rules=rules,
+            source_timeout_seconds=Config._env_int("SOURCE_TIMEOUT_SECONDS", "600"),
             first_run_lookback_hours=Config._env_int("FIRST_RUN_LOOKBACK_HOURS", "72", minimum=0),
         )

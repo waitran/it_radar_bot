@@ -4,6 +4,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from bs4 import BeautifulSoup
 
+from app.collectors.base import check_collection, collection_task
 from app.collectors.website_http import WebsiteSourceError, read_text, text, same_host_url, job_dates
 from app.models import Item
 
@@ -15,6 +16,7 @@ class CrocCollector:
     def __init__(self, source):
         self.source = source
 
+    @collection_task
     def fetch(self) -> list[Item]:
         source_url = same_host_url(self.source.url, self.source.url, self.HOST)
         soup = BeautifulSoup(read_text(source_url), 'html.parser')
@@ -31,6 +33,7 @@ class CrocCollector:
         pending, visited, cards = [first], set(), {}
         page_contents = set()
         while pending:
+            check_collection()
             url = pending.pop(0)
             if url in visited:
                 continue
@@ -81,6 +84,7 @@ class CrocCollector:
                     pending.append(target)
         items = []
         for url in cards:
+            check_collection()
             soup = BeautifulSoup(read_text(url), 'html.parser')
             main = soup.select_one('.vacancy-detail__content-main')
             title = main.select_one('h1') if main else None
@@ -98,4 +102,5 @@ class CrocCollector:
                 published_at=published, deadline=deadline, registration_status='unknown',
                 kind='vacancy', experience=text(tags) if tags else '',
             ))
+        check_collection()
         return items

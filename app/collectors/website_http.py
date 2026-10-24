@@ -7,7 +7,7 @@ from urllib.parse import urljoin, urlsplit
 import requests
 from bs4 import BeautifulSoup
 
-from app.collectors.base import http_get, http_post_json
+from app.collectors.base import http_get, http_post_json, check_collection
 
 
 class WebsiteSourceError(RuntimeError):
@@ -24,6 +24,7 @@ def same_host_url(value, base, host):
 
 
 def read_text(url, *, post=False):
+    check_collection()
     try:
         response = http_post_json(url, {}) if post else http_get(url, allow_redirects=False)
     except requests.HTTPError as exc:
@@ -31,6 +32,7 @@ def read_text(url, *, post=False):
         raise WebsiteSourceError(f'HTTP {status} у {urlsplit(url).hostname}; обход ограничений не выполнялся.') from None
     except requests.RequestException as exc:
         raise WebsiteSourceError(f'{type(exc).__name__} у {urlsplit(url).hostname}.') from None
+    check_collection()
     if response.status_code != 200:
         raise WebsiteSourceError(f'HTTP {response.status_code} у {urlsplit(url).hostname}; перенаправления не выполняются.')
     if len(response.content) > 12_000_000:

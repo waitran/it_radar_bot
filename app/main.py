@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from app.collectors import croc, k2, rtkit, telegram_channel
+from app.collectors.base import collection_scope, check_collection, CollectionCancelled, CollectionTimeout
 from app.config import Config, ConfigurationError
 from app.db import Database
 from app.filters import Filters
@@ -199,9 +200,13 @@ class Bot:
     # ---------- сбор одного источника ----------
     def collect_source(self, key: str, name: str, fetch) -> list[Item] | None:
         try:
-            items = fetch()
+            with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
+                items = fetch()
+                check_collection()
             self.db.set_source_state(key, error="")
             return items
+        except CollectionCancelled:
+            raise
         except Exception as e:  # noqa: BLE001 — ошибка источника не останавливает остальные
             log.error("источник %s: ошибка сбора: %s", key, e)
             self.db.set_source_state(key, error=str(e)[:300])
@@ -319,7 +324,10 @@ class Bot:
             source=sources[row["source_key"]]
             if current is None and source.type=="telegram_channel":
                 try:
-                    current=telegram_channel.fetch_post(source.username,int(row["external_id"]))
+                    with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
+                        current=telegram_channel.fetch_post(source.username,int(row["external_id"]))
+                except CollectionCancelled:
+                    return sent
                 except Exception:
                     self.db.set_source_state(source.key,error="Не удалось повторно прочитать публикацию Telegram")
                     self._available_sources.discard(row["source_key"])
@@ -371,6 +379,7 @@ class Bot:
             self._undated_cutoff = float(self.db.get_flag('source_snapshot:'+key, '0'))
             new_items=0
             for it in items:
+                check_collection()
                 self._fresh_items[it.item_key]=it
                 with self._lock:
                     already_seen = self.db.exists(it.item_key)
@@ -381,6 +390,7 @@ class Bot:
                         row = self.db.item_row(it.item_key)
                         if row and row['delivery_state'] in {'pending', 'baseline'}:
                             matched += 1
+            check_collection()
             if first:
                 self.db.set_source_state(key,initialized=True)
             self.db.set_flag("source_snapshot:"+key, str(self._cycle_started))
@@ -397,15 +407,18 @@ class Bot:
                 # Persist the legacy boundary before processing, so a crash partway
                 # through ingestion cannot turn a partial batch into a new cursor.
                 self.db.save_telegram_cursor(source_key, cursor)
-                items = telegram_channel.fetch_channel(ch.username, since_id=cursor, max_pages=ch.max_pages)
-                n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None)
-                if items:
-                    self.db.save_telegram_cursor(source_key, max(int(it.external_id) for it in items))
-                self.db.set_source_state(ch.key, error="")
+                with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
+                    items = telegram_channel.fetch_channel(ch.username, since_id=cursor, max_pages=ch.max_pages)
+                    n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None)
+                    if items:
+                        self.db.save_telegram_cursor(source_key, max(int(it.external_id) for it in items))
+                    self.db.set_source_state(ch.key, error="")
                 self._available_sources.add(source_key)
                 successful += 1
                 found += n_found
                 new_count += n_new
+            except CollectionCancelled:
+                break
             except Exception as exc:
                 log.error("источник %s: ошибка Telegram: %s", ch.key, exc)
                 self.db.set_source_state(ch.key, error=str(exc)[:300])
@@ -420,10 +433,17 @@ class Bot:
                 errors.append(f"{w.key}: нет сборщика для типа {w.type}")
                 continue
             collector = cls(w)
-            items = self.collect_source(w.key, w.name, collector.fetch)
-            if items is None:
+            try:
+                with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
+                    items = self.collect_source(w.key, w.name, collector.fetch)
+                    if items is None:
+                        continue
+                    n_found, n_new = handle_source(w.key, items, initial_snapshot=not self.db.source_initialized(w.key))
+            except CollectionCancelled:
+                break
+            except CollectionTimeout as exc:
+                self.db.set_source_state(w.key,error=str(exc))
                 continue
-            n_found, n_new = handle_source(w.key, items, initial_snapshot=not self.db.source_initialized(w.key))
             self._available_sources.add(w.key)
             successful += 1
             found += n_found

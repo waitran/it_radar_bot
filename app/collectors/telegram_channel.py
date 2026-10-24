@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urljoin, urlsplit
 import requests
 from bs4 import BeautifulSoup
 
-from app.collectors.base import http_get
+from app.collectors.base import http_get, check_collection, collection_task
 from app.models import Item
 
 log = logging.getLogger("telegram")
@@ -155,6 +155,7 @@ def _parse_page(html: str, username: str) -> tuple[list[Item], int | None]:
     return [items[key] for key in sorted(items)], before
 
 
+@collection_task
 def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int = 25) -> list[Item]:
     """Initial snapshot: one page. Thereafter fetch all posts newer than since_id.
 
@@ -172,6 +173,7 @@ def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int 
     results = {}
     previous_min = None
     for page in range(max_pages):
+        check_collection()
         url = base if before is None else f"{base}?before={before}"
         try:
             response = http_get(url, allow_redirects=False)
@@ -180,6 +182,7 @@ def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int 
             raise TelegramSourceError(f"Telegram HTTP {status}; обход ограничений не выполняется.") from None
         except requests.RequestException as exc:
             raise TelegramSourceError(f"Ошибка сети Telegram: {type(exc).__name__}.") from None
+        check_collection()
         if response.status_code != 200:
             raise TelegramSourceError(f"Telegram HTTP {response.status_code}: перенаправление или недоступная страница.")
         if len(response.content) > 8_000_000:
@@ -200,6 +203,7 @@ def fetch_channel(username: str, *, since_id: int | None = None, max_pages: int 
     raise TelegramSourceError("Достигнут max_pages до сохранённого ID. Увеличьте max_pages; граница не сдвинута.")
 
 
+@collection_task
 def fetch_post(username: str, post_id: int) -> Item | None:
     """Re-read a queued post from a public history page before retrying delivery."""
     if not USERNAME.fullmatch(username) or type(post_id) is not int or post_id < 1:
@@ -208,6 +212,7 @@ def fetch_post(username: str, post_id: int) -> Item | None:
         response = http_get(f'https://t.me/s/{username}?before={post_id + 1}', allow_redirects=False)
     except requests.RequestException as exc:
         raise TelegramSourceError(f'Повторная проверка Telegram: {type(exc).__name__}.') from None
+    check_collection()
     if response.status_code != 200 or len(response.content) > 8_000_000:
         raise TelegramSourceError('Публичная страница для повторной проверки недоступна.')
     items, _ = _parse_page(response.text, username)

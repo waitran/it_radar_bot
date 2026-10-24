@@ -8,6 +8,7 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Задайте TELEGRAM_BOT_TOKEN в .env или окружении}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:-0}
       DB_PATH: /data/bot.db
+      SOURCE_TIMEOUT_SECONDS: ${SOURCE_TIMEOUT_SECONDS:-600}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-3600}
     volumes:
       - bot-data:/data
