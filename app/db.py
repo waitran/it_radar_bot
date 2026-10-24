@@ -75,6 +75,7 @@ class Database:
                     raise RuntimeError("Database is already in use by another bot process") from None
             self._conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
+            self._conn.execute('CREATE TEMP TABLE blocked_delivery_items(item_key TEXT PRIMARY KEY)')
             self._conn.execute("PRAGMA foreign_keys=ON")
             version = self._conn.execute("PRAGMA user_version").fetchone()[0]
             if version > SCHEMA_VERSION:
@@ -237,7 +238,7 @@ class Database:
                 self._conn.execute("UPDATE command_replies SET status=?,available_at=? WHERE telegram_id=?", (status,available_at,telegram_id))
 
     def fill_user_queue(self, *, capacity=10000, batch=500,
-                        available_sources=None, configured_sources=None):
+                        available_sources=None, configured_sources=None, blocked_items=()):
         """Materialize a bounded, fair queue; unavailable sources keep durable suspended tasks."""
         with self._lock, self._conn:
             if configured_sources is not None:
@@ -264,6 +265,10 @@ class Database:
                 else:
                     self._conn.execute("""UPDATE user_deliveries SET status='suspended',
                         reason='source_unavailable' WHERE status='pending'""")
+            self._conn.execute('DELETE FROM blocked_delivery_items')
+            self._conn.executemany('INSERT OR IGNORE INTO blocked_delivery_items VALUES(?)', ((key,) for key in blocked_items))
+            self._conn.execute("""UPDATE user_deliveries SET status='suspended',reason='detail_unavailable'
+                WHERE status='pending' AND item_key IN (SELECT item_key FROM blocked_delivery_items)""")
             count = self._conn.execute("SELECT COUNT(*) FROM user_deliveries WHERE status IN ('pending','sending')").fetchone()[0]
             remaining = min(max(0, batch), max(0, capacity-count))
             if not remaining or not sources:
@@ -283,11 +288,13 @@ class Database:
                     FROM user_deliveries d JOIN users u ON u.telegram_id=d.telegram_id
                     JOIN seen_items s ON s.item_key=d.item_key
                     WHERE d.status='suspended' AND u.is_active=1 AND s.source_key=?
+                    AND NOT EXISTS(SELECT 1 FROM blocked_delivery_items b WHERE b.item_key=s.item_key)
                     ORDER BY d.id LIMIT ?""", (source,limit)).fetchall()
                 if len(rows) < limit:
                     rows.extend(self._conn.execute("""SELECT u.telegram_id,s.item_key
                         FROM seen_items s JOIN users u ON u.is_active=1 AND u.subscribed_at<=s.eligible_at
                         WHERE s.source_key=? AND s.eligible_at IS NOT NULL AND s.delivery_state='pending'
+                        AND NOT EXISTS(SELECT 1 FROM blocked_delivery_items b WHERE b.item_key=s.item_key)
                         AND (s.opportunity_at IS NULL OR julianday(s.opportunity_at)>julianday(u.subscribed_at,'unixepoch'))
                         AND NOT EXISTS(SELECT 1 FROM user_deliveries d
                             WHERE d.telegram_id=u.telegram_id AND d.item_key=s.item_key)
@@ -442,7 +449,17 @@ class Database:
                 for alias in identities(item):
                     self._conn.execute("INSERT OR IGNORE INTO item_aliases VALUES(?,?)",(alias,item.item_key))
 
-    def revise_item(self, item, content_hash, *, state, activate_at=None):
+    def record_unread_details(self, source_key, catalog, failed_keys, *, baseline, eligible_at):
+        """Remember first catalogue admission even when a detail is unavailable."""
+        with self._lock, self._conn:
+            for key in failed_keys:
+                identifier,url = catalog[key]
+                self._conn.execute("""INSERT OR IGNORE INTO seen_items
+                    (item_key,source_key,external_id,url,first_seen_at,notified,baseline,delivery_state,eligible_at)
+                    VALUES(?,?,?,?,?,?,?,?,?)""", (key,source_key,identifier,url,self._now(),int(baseline),int(baseline),
+                    'baseline' if baseline else 'awaiting_detail',None if baseline else eligible_at))
+
+    def revise_item(self, item, content_hash, *, state, activate_at=None, first_detail=False):
         """Update content without replaying sent/uncertain/skipped deliveries."""
         with self._lock, self._conn:
             self._conn.execute("""UPDATE seen_items SET title=?,summary=?,url=?,apply_url=?,
@@ -455,6 +472,10 @@ class Database:
             if (item.categories and state != 'rejected') or delivered:
                 self._conn.executemany('INSERT OR IGNORE INTO item_aliases VALUES(?,?)',
                                        ((alias,item.item_key) for alias in identities(item)))
+            if first_detail:
+                self._conn.execute('UPDATE seen_items SET opportunity_at=published_at WHERE item_key=?',(item.item_key,))
+            if state == 'baseline':
+                self._conn.execute('UPDATE seen_items SET baseline=1,notified=1 WHERE item_key=?',(item.item_key,))
             if state in {'rejected','baseline'}:
                 self._conn.execute('UPDATE seen_items SET eligible_at=NULL WHERE item_key=?',(item.item_key,))
             if state == 'rejected':

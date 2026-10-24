@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from app.collectors import croc, k2, rtkit, telegram_channel
+from app.collectors.website_http import WebsiteSnapshot
 from app.collectors.base import collection_scope, check_collection, CollectionCancelled, CollectionTimeout
 from app.config import Config, ConfigurationError
 from app.db import Database
@@ -55,6 +56,7 @@ class Bot:
             self.db.set_flag("check_in_progress", "0")
         self.fatal_error = None
         self.bot_username = ""
+        self._unverified_items = set()
         self._fresh_items = {}
         self._available_sources = set()
         self._last_scan = 0.0
@@ -203,7 +205,7 @@ class Bot:
             with collection_scope(self.stop_event,budget=self.cfg.source_timeout_seconds):
                 items = fetch()
                 check_collection()
-            self.db.set_source_state(key, error="")
+            self.db.set_source_state(key, error=items.error_summary if isinstance(items,WebsiteSnapshot) else '')
             return items
         except CollectionCancelled:
             raise
@@ -223,6 +225,11 @@ class Bot:
         if stored:
             state = stored['delivery_state']
             # Accepted baseline and legacy terminal states remain non-broadcastable.
+            if state == 'awaiting_detail':
+                duplicate = ok and self.db.is_duplicate(item)
+                state = 'rejected' if not ok else ('skipped' if duplicate else ('baseline' if baseline else 'pending'))
+                self.db.revise_item(item,fingerprint,state=state,first_detail=True)
+                return state == 'pending'
             if state not in {'pending','rejected','expired'} or not stored['content_hash']:
                 self.db.revise_item(item,fingerprint,state=state)
                 return False
@@ -321,7 +328,7 @@ class Bot:
         configured = self.delivery_sources()
         ready = (self._available_sources & configured.keys()
                  if now.timestamp()-self._last_scan <= 2*self.cfg.poll_interval_seconds else set())
-        self.db.fill_user_queue(available_sources=ready, configured_sources=configured)
+        self.db.fill_user_queue(available_sources=ready, configured_sources=configured, blocked_items=self._unverified_items)
 
     def drain_pending(self, *, now=None):
         now = now or datetime.now(timezone.utc)
@@ -389,6 +396,7 @@ class Bot:
         errors: list[str] = []
         checked_keys = []
         successful = matched = 0
+        self._unverified_items = set()
         self._fresh_items = {}
         self._available_sources = set()
         self._last_scan = time.time()
@@ -401,6 +409,10 @@ class Bot:
             # the first snapshot after subscription/resume cannot establish recency.
             self._undated_cutoff = float(self.db.get_flag('source_snapshot:'+key, '0'))
             new_items=0
+            if isinstance(items,WebsiteSnapshot):
+                self._unverified_items.update(items.failed_details)
+                self.db.record_unread_details(key,items.catalog,items.failed_details,
+                    baseline=initial_snapshot,eligible_at=self._undated_cutoff)
             for it in items:
                 check_collection()
                 self._fresh_items[it.item_key]=it

@@ -5,7 +5,7 @@ from urllib.parse import urlencode, urlsplit
 from bs4 import BeautifulSoup
 
 from app.collectors.base import check_collection, collection_task
-from app.collectors.website_http import WebsiteSourceError, read_text, read_json, text, same_host_url, job_dates
+from app.collectors.website_http import WebsiteSourceError, read_text, read_json, text, same_host_url, job_dates, WebsiteSnapshot
 from app.models import Item
 
 
@@ -59,7 +59,7 @@ class K2Collector:
             page = str(data['nextslice']) if data.get('nextslice') else ''
         if len(products) != total:
             raise WebsiteSourceError('К2: получен неполный каталог вакансий.')
-        items, seen_urls = [], set()
+        catalog, entries, seen_urls = {}, [], set()
         for product in products.values():
             check_collection()
             target = product.get('url') or product.get('buttonlink')
@@ -70,28 +70,42 @@ class K2Collector:
             if path in ('', '/vacancy') or url in seen_urls:
                 raise WebsiteSourceError('К2: некорректная или повторная ссылка вакансии.')
             seen_urls.add(url)
-            detail = BeautifulSoup(read_text(url), 'html.parser')
-            if detail.select_one('.t1060__title') is None:
-                raise WebsiteSourceError('К2: не найден заголовок страницы вакансии.')
-            blocks = [block for block in detail.select('#allrecords > .t-rec')
-                      if block.get('data-record-type') in self.CONTENT_TYPES]
-            content = list(dict.fromkeys(text(block) for block in blocks if text(block)))
-            if len(content) < 3:
-                raise WebsiteSourceError('К2: описание вакансии неполное.')
-            characteristics = product.get('characteristics', [])
-            if not isinstance(characteristics, list):
-                raise WebsiteSourceError('К2: некорректные характеристики вакансии.')
-            tags = [text(x.get('value')) for x in characteristics if isinstance(x, dict)]
-            full_text = '\n'.join(dict.fromkeys(filter(None, [text(product.get('descr')), *tags, *content])))
-            published, deadline = job_dates(detail)
-            apply_url = url + '#form' if detail.select_one('a[name="form"], #form') and detail.select_one('form') else None
-            items.append(Item(
-                source_key=self.source.key, source_name=self.source.name,
-                # Preserve the former sitemap collector's slug IDs and seen rows.
-                external_id=path.rsplit('/', 1)[-1], url=url, title=text(product['title']),
-                summary=full_text[:500], raw_text=full_text, apply_url=apply_url,
-                published_at=published, deadline=deadline, source_deadline=deadline, registration_status='unknown',
-                kind='vacancy',
-            ))
+            key = f'{self.source.key}:{path.rsplit("/",1)[-1]}'
+            if key in catalog:
+                raise WebsiteSourceError('К2: повтор ID вакансии; полнота не подтверждена.')
+            catalog[key] = (path.rsplit('/',1)[-1],url)
+            entries.append((key,product,url,path))
+        items, failures = [], {}
+        for key,product,url,path in entries:
+            check_collection()
+            try:
+                items.append(self._detail(product,url,path))
+            except WebsiteSourceError as exc:
+                failures[key] = str(exc)[:200]
         check_collection()
-        return items
+        return WebsiteSnapshot(items,catalog=catalog,failed_details=failures)
+
+    def _detail(self, product, url, path):
+        detail = BeautifulSoup(read_text(url), 'html.parser')
+        if detail.select_one('.t1060__title') is None:
+            raise WebsiteSourceError('К2: не найден заголовок страницы вакансии.')
+        blocks = [block for block in detail.select('#allrecords > .t-rec')
+                  if block.get('data-record-type') in self.CONTENT_TYPES]
+        content = list(dict.fromkeys(text(block) for block in blocks if text(block)))
+        if len(content) < 3:
+            raise WebsiteSourceError('К2: описание вакансии неполное.')
+        characteristics = product.get('characteristics', [])
+        if not isinstance(characteristics, list):
+            raise WebsiteSourceError('К2: некорректные характеристики вакансии.')
+        tags = [text(x.get('value')) for x in characteristics if isinstance(x, dict)]
+        full_text = '\n'.join(dict.fromkeys(filter(None, [text(product.get('descr')), *tags, *content])))
+        published, deadline = job_dates(detail)
+        apply_url = url + '#form' if detail.select_one('a[name="form"], #form') and detail.select_one('form') else None
+        return Item(
+            source_key=self.source.key, source_name=self.source.name,
+            # Preserve the former sitemap collector's slug IDs and seen rows.
+            external_id=path.rsplit('/', 1)[-1], url=url, title=text(product['title']),
+            summary=full_text[:500], raw_text=full_text, apply_url=apply_url,
+            published_at=published, deadline=deadline, source_deadline=deadline, registration_status='unknown',
+            kind='vacancy',
+        )

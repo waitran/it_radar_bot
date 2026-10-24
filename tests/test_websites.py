@@ -117,13 +117,16 @@ class K2Tests(unittest.TestCase):
                 K2Collector(k2_source()).fetch()
         self.assertEqual(read.call_count, 1)
 
-    def test_detail_failure_does_not_produce_partial_items(self):
+    def test_detail_failure_is_explicit_without_unverified_items(self):
         with patch('app.collectors.k2.read_text', side_effect=[fixture('k2_listing.html'), WebsiteSourceError('403')]), \
                 patch('app.collectors.k2.read_json', return_value=catalog()):
-            with self.assertRaises(WebsiteSourceError):
-                K2Collector(k2_source()).fetch()
-        with self.assertRaises(WebsiteSourceError):
-            self.fetch(detail='<html>template changed</html>')
+            snapshot = K2Collector(k2_source()).fetch()
+        self.assertEqual(snapshot,[])
+        self.assertEqual(len(snapshot.failed_details),1)
+        self.assertEqual(len(snapshot.catalog),1)
+        snapshot = self.fetch(detail='<html>template changed</html>')
+        self.assertEqual(snapshot,[])
+        self.assertEqual(len(snapshot.failed_details),1)
 
     def test_changed_listing_fails_without_guessing(self):
         with patch('app.collectors.k2.read_text', return_value='<html>new page</html>'), patch('app.collectors.k2.read_json') as api:
@@ -232,8 +235,9 @@ class CrocTests(unittest.TestCase):
         self.assertEqual(len(calls), 15)
 
     def test_missing_detail_or_form(self):
-        with self.assertRaises(WebsiteSourceError):
-            self.fetch(detail='<html>not found</html>')
+        snapshot, _ = self.fetch(detail='<html>not found</html>')
+        self.assertEqual(snapshot,[])
+        self.assertEqual(len(snapshot.failed_details),13)
         items, _ = self.fetch(detail=fixture('croc_detail.html').replace('responseForm','noForm'))
         self.assertTrue(all(i.apply_url is None for i in items))
 

@@ -14,6 +14,29 @@ class WebsiteSourceError(RuntimeError):
     pass
 
 
+class WebsiteSnapshot(list):
+    """A fully verified catalogue with independently verified/failed details.
+
+    List-compatible for probes and existing callers. A bad listing must raise,
+    never produce this result; failed details are still known catalogue members.
+    """
+    def __init__(self, items, *, catalog, failed_details):
+        super().__init__(items)
+        self.catalog = dict(catalog)  # item_key -> (external_id, public URL)
+        self.failed_details = dict(failed_details)
+        verified = {entry.item_key for entry in self}
+        if (len(verified) != len(self) or verified & self.failed_details.keys()
+                or verified | self.failed_details.keys() != self.catalog.keys()):
+            raise ValueError('Snapshot must account for every catalogue ID exactly once')
+
+    @property
+    def error_summary(self):
+        if not self.failed_details:
+            return ''
+        details = '; '.join(f'{key}: {reason}' for key,reason in list(self.failed_details.items())[:3])
+        return f'Не прочитано карточек: {len(self.failed_details)}. {details}'[:500]
+
+
 def same_host_url(value, base, host):
     value = urljoin(base, str(value or ''))
     parsed = urlsplit(value)

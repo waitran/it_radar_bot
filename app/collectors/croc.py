@@ -5,7 +5,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from bs4 import BeautifulSoup
 
 from app.collectors.base import check_collection, collection_task
-from app.collectors.website_http import WebsiteSourceError, read_text, text, same_host_url, job_dates
+from app.collectors.website_http import WebsiteSourceError, read_text, text, same_host_url, job_dates, WebsiteSnapshot
 from app.models import Item
 
 
@@ -82,25 +82,38 @@ class CrocCollector:
                 target = urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(sorted(params.items())), ''))
                 if target not in visited and target not in pending:
                     pending.append(target)
-        items = []
+        catalog = {}
         for url in cards:
+            identifier = urlsplit(url).path.rstrip('/').rsplit('/',1)[-1]
+            key = f'{self.source.key}:{identifier}'
+            if key in catalog:
+                raise WebsiteSourceError('КРОК: повтор ID вакансии; полнота не подтверждена.')
+            catalog[key] = (identifier,url)
+        items, failures = [], {}
+        for key, (identifier,url) in catalog.items():
             check_collection()
-            soup = BeautifulSoup(read_text(url), 'html.parser')
-            main = soup.select_one('.vacancy-detail__content-main')
-            title = main.select_one('h1') if main else None
-            sections = main.select('.vacancy-detail__content-main-text-block, .vacancy-detail__content-main-item') if main else []
-            if title is None or len(sections) < 2:
-                raise WebsiteSourceError('КРОК: описание вакансии отсутствует или неполное.')
-            tags = main.find('ul', recursive=False)
-            content = '\n'.join(filter(None, [text(title), text(tags) if tags else '', *(text(s) for s in sections)]))
-            published, deadline = job_dates(soup)
-            items.append(Item(
-                source_key=self.source.key, source_name=self.source.name,
-                external_id=urlsplit(url).path.rstrip('/').rsplit('/', 1)[-1],
-                url=url, title=text(title), summary=content[:500], raw_text=content,
-                apply_url=url + '#responseForm' if soup.select_one('#responseForm form') else None,
-                published_at=published, deadline=deadline, source_deadline=deadline, registration_status='unknown',
-                kind='vacancy', experience=text(tags) if tags else '',
-            ))
+            try:
+                items.append(self._detail(url,identifier))
+            except WebsiteSourceError as exc:
+                failures[key] = str(exc)[:200]
         check_collection()
-        return items
+        return WebsiteSnapshot(items,catalog=catalog,failed_details=failures)
+
+    def _detail(self, url, identifier):
+        soup = BeautifulSoup(read_text(url), 'html.parser')
+        main = soup.select_one('.vacancy-detail__content-main')
+        title = main.select_one('h1') if main else None
+        sections = main.select('.vacancy-detail__content-main-text-block, .vacancy-detail__content-main-item') if main else []
+        if title is None or len(sections) < 2:
+            raise WebsiteSourceError('КРОК: описание вакансии отсутствует или неполное.')
+        tags = main.find('ul', recursive=False)
+        content = '\n'.join(filter(None, [text(title), text(tags) if tags else '', *(text(s) for s in sections)]))
+        published, deadline = job_dates(soup)
+        return Item(
+            source_key=self.source.key, source_name=self.source.name,
+            external_id=identifier,
+            url=url, title=text(title), summary=content[:500], raw_text=content,
+            apply_url=url + '#responseForm' if soup.select_one('#responseForm form') else None,
+            published_at=published, deadline=deadline, source_deadline=deadline, registration_status='unknown',
+            kind='vacancy', experience=text(tags) if tags else '',
+        )

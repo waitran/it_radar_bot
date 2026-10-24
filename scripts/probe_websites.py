@@ -6,7 +6,7 @@ import logging
 from app.config import Config
 from app.logging_config import configure_logging
 from app.main import WEBSITE_COLLECTORS
-from app.collectors.website_http import WebsiteSourceError
+from app.collectors.website_http import WebsiteSourceError, WebsiteSnapshot
 
 
 def main():
@@ -26,7 +26,10 @@ def main():
     for source in sources:
         try:
             items = WEBSITE_COLLECTORS[source.type](source).fetch()
-            result = {'source': source.key, 'status': 'ok', 'count': len(items),
+            detail_errors = items.failed_details if isinstance(items,WebsiteSnapshot) else {}
+            failed = failed or bool(detail_errors)
+            result = {'source': source.key, 'status': 'partial' if detail_errors else 'ok',
+                      'detail_errors': detail_errors, 'count': len(items),
                       'with_application_url': sum(i.apply_url is not None for i in items),
                       'with_published_date': sum(i.published_at is not None for i in items),
                       'items': [{'id': i.external_id, 'title': i.title, 'text_length': len(i.raw_text)} for i in items]}
