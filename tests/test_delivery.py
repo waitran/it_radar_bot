@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -347,7 +348,8 @@ class CommandTests(BotFixture):
 
     def test_command_is_persisted_before_acknowledgement_failure(self):
         self.bot.notifier.send.side_effect=RuntimeError('lost acknowledgement')
-        with self.assertRaises(RuntimeError):handle_update(self.bot,self.update(10,'/stop'))
+        handle_update(self.bot,self.update(10,'/stop'))
+        with self.assertRaises(RuntimeError):self.bot.flush_command_reply()
         self.assertFalse(self.bot.is_enabled());self.assertEqual(self.bot.db.get_flag('offset'),'11')
         handle_update(self.bot,self.update(9,'/start'))
         self.assertFalse(self.bot.is_enabled())
@@ -362,7 +364,10 @@ class CommandTests(BotFixture):
         self.bot.bot_username='mybot';handle_update(self.bot,self.update(6,'/stop@mybot'))
         self.assertFalse(self.bot.is_enabled())
         handle_update(self.bot,self.update(7,'/stopper'))
-        self.bot.service_message.assert_called_with('Неизвестная команда.\n'+HELP,telegram_id=123)
+        self.bot.service_message.assert_not_called()
+        reply=self.bot.db.pending_reply(time.time())
+        self.assertEqual(reply['text'],'Неизвестная команда.\n'+HELP)
+        self.assertEqual(reply['telegram_id'],123)
 
     def test_409_terminates_polling(self):
         self.bot.notifier.call=Mock(side_effect=BotAPIError(409))

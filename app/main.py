@@ -100,6 +100,7 @@ class Bot:
             if delay > 0 and self.stop_event.wait(delay):
                 return
             self.db.set_flag('send_after',str(time.time()+1.1))
+            self.db.set_flag('last_send_kind','command')
             result = self.notifier.send(escaped_clip(text, 3800), chat_id=telegram_id)
             if result.status == "sent":
                 self.db.set_flag("send_after",str(time.time()+1.1))
@@ -119,7 +120,8 @@ class Bot:
             row = self.db.pending_reply(time.time())
             if not row:
                 return
-            self.db.set_reply_state(row['telegram_id'], 'sending')
+            if not self.db.claim_command_reply(row['telegram_id'], time.time()):
+                return False
             try:
                 result = self.service_message(row['text'], telegram_id=row['telegram_id'])
             except Exception:
@@ -131,6 +133,7 @@ class Bot:
                 self.db.set_reply_state(row['telegram_id'], 'pending', time.time()+max(10,result.retry_after))
             else:
                 self.db.set_reply_state(row['telegram_id'], result.status)
+            return result is not None
 
     def check_request_reply(self, now):
         """Called with the command lock held; accepting is persisted with offset."""
@@ -156,10 +159,11 @@ class Bot:
             try:
                 result = self.service_message(self.db.get_flag("check_summary", "Итог проверки недоступен."))
             except Exception:
-                log.exception("Не удалось отправить итог /check; он сохранён для /status")
-                return
+                log.exception("Не удалось отправить итог /check; он сохранён для оператора")
+                return True
             if result is None or result.status == "retry":
                 self.db.set_flag("check_summary_pending", "1")
+            return result is not None
 
     def run_cycle(self):
         with self._lock:
@@ -251,6 +255,7 @@ class Bot:
             if not self.db.claim_user_delivery(row['id'], now):
                 return False
             self.db.set_flag('send_after', str(max(now.timestamp(),time.time())+1.1))
+            self.db.set_flag('last_send_kind','event')
             try:
                 result = self.notifier.send(message, chat_id=telegram_id)
             except Exception:
@@ -330,6 +335,23 @@ class Bot:
                 break
         return sent
 
+    def dispatch_pending(self, *, now=None):
+        """Alternate occupied HTTP slots between commands and events when both are ready."""
+        now = now or datetime.now(timezone.utc)
+        if self.stop_event.is_set() or float(self.db.get_flag('send_after','0')) > now.timestamp():
+            return 0
+        self.fill_delivery_queue(now)
+        if self.db.get_flag('last_send_kind') != 'command':
+            if self.flush_command_reply() or self.flush_check_summary():
+                return 0
+            return self.drain_pending(now=now)
+        sent = self.drain_pending(now=now)
+        # A rejected, retried or ambiguous event consumed a slot as well.
+        if float(self.db.get_flag('send_after','0')) <= now.timestamp():
+            if not self.flush_command_reply():
+                self.flush_check_summary()
+        return sent
+
     def _run_cycle(self):
         started = datetime.now(timezone.utc)
         found = new_count = notified = 0
@@ -407,7 +429,7 @@ class Bot:
             found += n_found
             new_count += n_new
 
-        notified = self.drain_pending()
+        notified = self.dispatch_pending()
 
         # состояние ошибок источников
         for key in checked_keys:
@@ -426,7 +448,6 @@ class Bot:
         next_scan=0.0
         while not stop.is_set():
             try:
-                self.flush_command_reply()
                 if self.scan_requested.is_set():
                     self.scan_requested.clear()
                     next_scan=0.0
@@ -434,8 +455,7 @@ class Bot:
                     self.run_cycle()
                     next_scan=time.monotonic()+self.cfg.poll_interval_seconds
                 else:
-                    self.drain_pending()
-                self.flush_check_summary()
+                    self.dispatch_pending()
             except Exception:
                 log.exception("Ошибка цикла; состояние очереди сохранено")
                 next_scan=time.monotonic()+self.cfg.poll_interval_seconds
@@ -496,8 +516,7 @@ def handle_update(bot, upd):
         bot.db.user_control(telegram_id if authorized else 0,
                             sender.get('username') if isinstance(sender.get('username'),str) else None,
                             active=active, offset=identifier+1, reply=reply)
-        if reply:
-            bot.flush_command_reply()
+        # HTTP replies are sent by the shared scheduler; commands only persist state.
 
 
 def poll_updates(bot, stop):

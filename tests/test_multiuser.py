@@ -208,16 +208,19 @@ class MultiuserTests(unittest.TestCase):
         self.command(101,'/start 202')
         self.assertIsNone(self.bot.db.user(202))
         self.command(101,'/status')
-        reply=self.bot.service_message.call_args.args[0]
+        reply=self.bot.db.pending_reply(time.time())['text']
         self.assertNotIn('101',reply)
         self.assertNotIn('202',reply)
         self.command(101,'/unknown')
-        self.assertIn('Неизвестная команда',self.bot.service_message.call_args.args[0])
-        self.assertEqual(self.bot.service_message.call_args.kwargs['telegram_id'],101)
+        reply=self.bot.db.pending_reply(time.time())
+        self.assertIn('Неизвестная команда',reply['text'])
+        self.assertEqual(reply['telegram_id'],101)
+        self.bot.service_message.assert_not_called()
 
     def test_offset_and_subscription_commit_before_failed_ack(self):
         self.bot.service_message.side_effect=RuntimeError('response lost')
-        with self.assertRaises(RuntimeError):self.command(101,'/start')
+        self.command(101,'/start')
+        with self.assertRaises(RuntimeError):self.bot.flush_command_reply()
         self.assertTrue(self.bot.db.user(101)['is_active'])
         self.assertEqual(self.bot.db.get_flag('offset'),'2')
 
@@ -246,6 +249,7 @@ class MultiuserTests(unittest.TestCase):
     def test_safe_reply_retry_is_retained(self):
         self.bot.service_message.return_value=DeliveryResult('retry',code=429,retry_after=30)
         self.command(101,'/start')
+        self.bot.flush_command_reply()
         self.assertIsNone(self.bot.db.pending_reply(time.time()+29))
         self.assertEqual(self.bot.db.pending_reply(time.time()+31)['telegram_id'],101)
 

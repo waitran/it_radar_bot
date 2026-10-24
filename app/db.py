@@ -13,6 +13,9 @@ from app.dedup import identities
 import threading
 from datetime import datetime, timezone
 
+SCHEMA_VERSION = 3
+COMMAND_REPLY_INTERVAL = 5.0
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS seen_items (
     item_key       TEXT PRIMARY KEY,      -- source_key:external_id
@@ -73,8 +76,11 @@ class Database:
             self._conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA foreign_keys=ON")
+            version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+            if version > SCHEMA_VERSION:
+                raise RuntimeError("Database schema is newer than this application")
             existing = {row[1] for row in self._conn.execute("PRAGMA table_info(seen_items)")}
-            if existing and self._conn.execute("PRAGMA user_version").fetchone()[0] < 2 and path != ":memory:":
+            if existing and version < SCHEMA_VERSION and path != ":memory:":
                 self.backup_path = path + ".before-delivery-" + str(time.time_ns()) + ".bak"
                 backup = sqlite3.connect(self.backup_path)
                 try:
@@ -132,7 +138,9 @@ class Database:
                     telegram_id INTEGER PRIMARY KEY, text TEXT NOT NULL, status TEXT NOT NULL,
                     available_at REAL NOT NULL DEFAULT 0, updated_at REAL NOT NULL)""")
                 self._conn.execute("UPDATE command_replies SET status='uncertain' WHERE status='sending'")
-                self._conn.execute("PRAGMA user_version=2")
+                self._conn.execute("""CREATE TABLE IF NOT EXISTS command_reply_limits (
+                    telegram_id INTEGER PRIMARY KEY, reply_after REAL NOT NULL)""")
+                self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         except Exception:
             self.close()
             raise
@@ -194,7 +202,24 @@ class Database:
 
     def pending_reply(self, now):
         with self._lock:
-            return self._conn.execute("SELECT * FROM command_replies WHERE status='pending' AND available_at<=? ORDER BY updated_at LIMIT 1", (now,)).fetchone()
+            return self._conn.execute("""SELECT r.* FROM command_replies r
+                LEFT JOIN command_reply_limits l ON l.telegram_id=r.telegram_id
+                WHERE r.status='pending' AND r.available_at<=? AND COALESCE(l.reply_after,0)<=?
+                ORDER BY r.updated_at,r.telegram_id LIMIT 1""", (now,now)).fetchone()
+
+    def claim_command_reply(self, telegram_id, now):
+        """Claim once and persist the per-chat response limit before the HTTP attempt."""
+        with self._lock, self._conn:
+            claimed = self._conn.execute("""UPDATE command_replies SET status='sending'
+                WHERE telegram_id=? AND status='pending' AND available_at<=?
+                AND COALESCE((SELECT reply_after FROM command_reply_limits WHERE telegram_id=?),0)<=?""",
+                (telegram_id,now,telegram_id,now)).rowcount == 1
+            if claimed:
+                self._conn.execute('DELETE FROM command_reply_limits WHERE reply_after<=?', (now,))
+                self._conn.execute("""INSERT INTO command_reply_limits VALUES(?,?)
+                    ON CONFLICT(telegram_id) DO UPDATE SET reply_after=excluded.reply_after""",
+                    (telegram_id,now+COMMAND_REPLY_INTERVAL))
+            return claimed
 
     def set_reply_state(self, telegram_id, status, available_at=0):
         with self._lock, self._conn:
