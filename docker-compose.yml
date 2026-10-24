@@ -3,6 +3,7 @@ services:
     build: .
     container_name: it-radar-bot
     restart: unless-stopped
+    stop_grace_period: 60s
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Задайте TELEGRAM_BOT_TOKEN в .env или окружении}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:?Задайте OWNER_TELEGRAM_ID (числовой chat_id владельца)}
