@@ -30,3 +30,22 @@ class RepositoryChecksTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             (Path(directory)/'source.py').write_text('token = os.environ.get("TELEGRAM_BOT_TOKEN")')
             self.assertEqual(violations(directory,['source.py']),[])
+
+
+class PrivateCredentialFilesTests(unittest.TestCase):
+    def test_private_key_and_session_files_are_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = ['tls.pem', 'tls.key', 'identity.p12', 'identity.pfx',
+                     'app.keystore', 'bot.session', 'bot.session-journal',
+                     'credentials.json', 'service-account-prod.json']
+            for name in paths:
+                (Path(directory) / name).write_text('placeholder')
+            self.assertEqual({p['path'] for p in violations(directory, paths)}, set(paths))
+
+    def test_cloud_credentials_are_rejected_without_echo(self):
+        for value in ['AKIA' + 'A' * 16, 'sk-proj-' + 'a' * 40]:
+            with self.subTest(kind=value[:4]), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / 'source.txt').write_text(value)
+                result = violations(directory, ['source.txt'])
+                self.assertEqual(result, [{'path': 'source.txt', 'reason': 'potential credential'}])
+                self.assertNotIn(value, json.dumps(result))

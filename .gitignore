@@ -17,3 +17,16 @@ backups/
 *.sqlite3
 *.sqlite3.part
 upgrade-backups/
+
+# Private credentials and Telegram client sessions
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.session
+*.session-journal
+credentials.json
+service-account*.json
+.secrets/
+secrets/
