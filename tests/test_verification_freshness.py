@@ -125,3 +125,13 @@ class VerificationFreshnessTests(unittest.TestCase):
         self.bot.db.fill_user_queue(capacity=2,available_sources={'tg_example','tg_good'},blocked_items=self.bot._unverified_items)
         self.assertEqual(self.bot.db.multi_delivery_counts(),{'pending':2,'sent':2})
         for uid in (101,202):self.assertEqual(self.bot.db.user_delivery(uid,healthy.item_key)['telegram_message_id'],77)
+
+    def test_generation_change_does_not_lose_a_suspended_verification_retry(self):
+        key=self.entry.item_key;source=self.bot.cfg.channels[0];job=('post',key)
+        self.bot._unverified_items.add(key)
+        self.bot._verification_queue.put((job,key,source));self.bot._verification_jobs.add(job)
+        stop=threading.Event()
+        def stale(*args,**kwargs):stop.set();return False
+        with patch.object(self.bot,'_verify_item',side_effect=stale):self.bot._verification_loop(stop)
+        self.assertIn(key,self.bot._verification_retries)
+        self.assertNotIn(job,self.bot._verification_jobs)

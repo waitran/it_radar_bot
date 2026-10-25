@@ -344,7 +344,10 @@ class Bot:
             except queue.Empty:
                 continue
             try:
-                self._verify_item(key,source,time.time())
+                verified=self._verify_item(key,source,time.time())
+                if not verified:
+                    with self._lock:
+                        if key in self._unverified_items:self._defer_verification(key,source,time.time())
             except CollectionCancelled:
                 return
             except Exception as exc:
@@ -583,26 +586,44 @@ class Bot:
         successful = matched = 0
         with self._lock:
             self._cache_generation += 1
-            self._unverified_items = set()
-            self._fresh_items = {}
-            self._verified_at = {}
-            self._missing_items = set()
-            self._verify_after = {}
-            self._verification_retries = {}
-            self._website_verified_at = {}
-            self._website_failed = {}
-            self._source_verify_after = {}
-            self._available_sources = set()
-            self._last_scan = time.time()
+            configured=self.delivery_sources()
+            now=time.time()
+            for key,source in configured.items():
+                if source.type != 'telegram_channel' and key in self._available_sources:
+                    self._website_verified_at.setdefault(key,self._last_scan)
+            for key in set(self._fresh_items)|self._missing_items:
+                entry=self._fresh_items.get(key)
+                if (now-self._verified_at.get(key,self._last_scan) >= self.cfg.item_verification_ttl_seconds
+                        or (entry is not None and entry.source_key not in configured)):
+                    self._fresh_items.pop(key,None)
+                    self._verified_at.pop(key,None)
+                    self._missing_items.discard(key)
+            self._available_sources.intersection_update(configured)
+            self._last_scan=now
         self._cycle_started = started.timestamp()
 
-        def handle_source(key: str, items: list[Item], *, initial_snapshot: bool = False, known_cursor=None) -> tuple[int, int]:
+        def handle_source(key: str, items: list[Item], *, initial_snapshot: bool = False, known_cursor=None, source=None) -> tuple[int, int]:
             nonlocal matched
             first = not self.db.source_initialized(key)
             # Undated website publications need a successful personal baseline:
             # the first snapshot after subscription/resume cannot establish recency.
             self._undated_cutoff = float(self.db.get_flag('source_snapshot:'+key, '0'))
             new_items=0
+            if source is not None and source.type != 'telegram_channel':
+                catalog=set(items.catalog) if isinstance(items,WebsiteSnapshot) else {it.item_key for it in items}
+                failures=set(items.failed_details) if isinstance(items,WebsiteSnapshot) else set()
+                with self._lock:
+                    self._website_verified_at[key]=time.time()
+                    self._website_failed[key]=failures
+                    for item_key in list(self._fresh_items):
+                        if self._fresh_items[item_key].source_key == key and item_key not in catalog:
+                            self._fresh_items.pop(item_key,None)
+                            self._missing_items.add(item_key)
+                            self._verified_at[item_key]=time.time()
+                    for item_key in list(self._unverified_items):
+                        if item_key.startswith(key+':') and item_key not in failures:
+                            self._unverified_items.discard(item_key)
+                            self._verification_retries.pop(item_key,None)
             if isinstance(items,WebsiteSnapshot):
                 self._unverified_items.update(items.failed_details)
                 self.db.record_unread_details(key,items.catalog,items.failed_details,
@@ -612,6 +633,9 @@ class Bot:
                 with self._lock:
                     self._fresh_items[it.item_key]=it
                     self._verified_at[it.item_key]=time.time()
+                    self._unverified_items.discard(it.item_key)
+                    self._verification_retries.pop(it.item_key,None)
+                    self._missing_items.discard(it.item_key)
                     already_seen = self.db.exists(it.item_key)
                     baseline = initial_snapshot or (known_cursor is not None and not already_seen
                                                     and int(it.external_id) <= known_cursor)
@@ -641,7 +665,7 @@ class Bot:
                 self.db.save_telegram_cursor(source_key, cursor)
                 with self._source_scope(source_key):
                     items = telegram_channel.fetch_channel(ch.username, since_id=cursor, max_pages=ch.max_pages, include_recent=True)
-                    n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None, known_cursor=cursor)
+                    n_found, n_new = handle_source(ch.key, items, initial_snapshot=cursor is None, known_cursor=cursor, source=ch)
                     if items:
                         self.db.save_telegram_cursor(source_key, max(cursor or 0, max(int(it.external_id) for it in items)))
                     self.db.set_source_state(ch.key, error="")
@@ -652,6 +676,7 @@ class Bot:
             except CollectionCancelled:
                 break
             except Exception as exc:
+                with self._lock:self._available_sources.discard(source_key)
                 log.error("источник %s: ошибка Telegram: %s", ch.key, exc)
                 self.db.set_source_state(ch.key, error=str(exc)[:300])
 
@@ -669,11 +694,13 @@ class Bot:
                 with self._source_scope(w.key):
                     items = self.collect_source(w.key, w.name, collector.fetch)
                     if items is None:
+                        with self._lock:self._available_sources.discard(w.key)
                         continue
-                    n_found, n_new = handle_source(w.key, items, initial_snapshot=not self.db.source_initialized(w.key))
+                    n_found, n_new = handle_source(w.key, items, initial_snapshot=not self.db.source_initialized(w.key), source=w)
             except CollectionCancelled:
                 break
             except CollectionTimeout as exc:
+                with self._lock:self._available_sources.discard(w.key)
                 self.db.set_source_state(w.key,error=str(exc))
                 continue
             self._available_sources.add(w.key)

@@ -79,3 +79,27 @@ class BackgroundCollectionTests(unittest.TestCase):
                 self.bot.stop_event.set();runner.join(5)
             self.assertFalse(runner.is_alive())
             self.assertFalse(self.bot._scan_running)
+
+    def test_bad_first_source_does_not_hide_previous_healthy_snapshot(self):
+        bot=self.bot
+        bot.cfg.channels.reverse()
+        bot.db.user_control(101,active=True)
+        bot.db._conn.execute('UPDATE users SET subscribed_at=subscribed_at-60');bot.db._conn.commit()
+        entry=item('2','tg_good');entry.published_at=datetime.now(timezone.utc)
+        bot.db.add_item(entry,category='internships')
+        bot._fresh_items[entry.item_key]=entry
+        bot._available_sources={'tg_good'};bot._last_scan=entry.published_at.timestamp()
+        entered,release,sent=[threading.Event() for _ in range(3)]
+        def fetch(username,**kwargs):
+            if username=='bad':entered.set();release.wait(15)
+            return []
+        bot.notifier.send=Mock(side_effect=lambda *args,**kwargs:(sent.set() or DeliveryResult('sent',message_id=42)))
+        with patch('app.main.telegram_channel.fetch_channel',side_effect=fetch):
+            runner=threading.Thread(target=bot.loop,args=(bot.stop_event,));runner.start()
+            try:
+                self.assertTrue(entered.wait(3))
+                self.assertTrue(sent.wait(5),'a previous healthy snapshot was hidden by a different source')
+                self.assertFalse(release.is_set())
+            finally:bot.stop_event.set();release.set();runner.join(5)
+            self.assertFalse(runner.is_alive())
+        self.assertEqual(bot.db.user_delivery(101,entry.item_key)['status'],'sent')
