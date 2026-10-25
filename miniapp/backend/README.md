@@ -1,3 +1,5 @@
+Финальная эксплуатационная инструкция: [docs/miniapp.md](../../docs/miniapp.md).
+
 # Backend Mini App — этапы 1–3
 
 Избранное хранится в отдельном `MINIAPP_USER_DB_PATH` (по умолчанию `/data/miniapp.db`).

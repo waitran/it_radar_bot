@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from pydantic import BaseModel, Field, StrictInt
 
 
@@ -11,18 +12,18 @@ class User(BaseModel):
 
 
 class Event(BaseModel):
-    id: str
-    title: str
-    summary: str
-    url: str | None
-    apply_url: str | None
-    categories: list[str]
+    id: str = Field(max_length=512)
+    title: str = Field(max_length=512)
+    summary: str = Field(max_length=8000)
+    url: str | None = Field(max_length=2048)
+    apply_url: str | None = Field(max_length=2048)
+    categories: list[str] = Field(max_length=4)
     published_at: datetime | None
     event_at: datetime | None
     deadline_at: datetime | None
-    event_precision: str | None
-    deadline_precision: str | None
-    registration_status: str
+    event_precision: Literal['date', 'time'] | None
+    deadline_precision: Literal['date', 'time'] | None
+    registration_status: Literal['open', 'closed', 'unknown']
     is_favorite: bool = False
 
 

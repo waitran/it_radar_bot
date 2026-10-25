@@ -1,0 +1,16 @@
+**
+!miniapp/
+!miniapp/frontend/
+!miniapp/frontend/package.json
+!miniapp/frontend/package-lock.json
+!miniapp/frontend/index.html
+!miniapp/frontend/tsconfig.json
+!miniapp/frontend/vite.config.ts
+!miniapp/frontend/src/
+!miniapp/frontend/src/**
+!miniapp/frontend/public/
+!miniapp/frontend/public/**
+!miniapp/deploy/
+!miniapp/deploy/Caddyfile
+!miniapp/deploy/app.caddy
+!miniapp/deploy/start.sh

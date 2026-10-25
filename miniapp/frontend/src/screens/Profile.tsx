@@ -66,7 +66,7 @@ export function Profile({ user }: { user: User }) {
           интересно.
         </p>
         <div className="about-version">
-          IT Radar Mini App<span>v0.3</span>
+          IT Radar Mini App<span>v0.4</span>
         </div>
       </section>
       {bot ? (

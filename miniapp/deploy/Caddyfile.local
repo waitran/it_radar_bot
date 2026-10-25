@@ -1,0 +1,16 @@
+# Loopback-only integration tests. No public certificate is requested or claimed.
+{
+    admin off
+    auto_https off
+    log default {
+        exclude http.log.error
+    }
+}
+import /etc/caddy/app.caddy
+:8080 {
+    import app
+}
+http://127.0.0.1:8081 {
+    bind 127.0.0.1
+    respond /_health ok 200
+}

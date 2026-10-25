@@ -8,7 +8,7 @@ def validate_url(value):
         return ''
     try:
         url = urlsplit(value)
-        valid = (len(value) <= 2048 and url.scheme == 'https' and url.hostname
+        valid = (len(value) <= 2048 and '\\' not in value and url.scheme == 'https' and url.hostname
                  and not url.username and not url.password and not url.fragment
                  and not any(c.isspace() or ord(c) < 32 for c in value))
         _ = url.port

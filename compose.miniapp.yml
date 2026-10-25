@@ -1,0 +1,121 @@
+# Independent project. Never merge this file into the bot's Compose project.
+name: it-radar-miniapp
+x-api-image: &api-image
+  image: ${MINIAPP_API_IMAGE:-it-radar-miniapp-api:local}
+  build:
+    context: .
+    dockerfile: miniapp/backend/Dockerfile
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ['no-new-privileges:true']
+  logging:
+    driver: json-file
+    options: {max-size: '10m', max-file: '3'}
+services:
+  miniapp-storage-init:
+    <<: [*api-image, *hardening]
+    user: '0:0'
+    entrypoint: ['python', '-m', 'miniapp.backend.storage_init']
+    restart: 'no'
+    network_mode: none
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    mem_limit: 128m
+    pids_limit: 32
+    environment:
+      TARGET_UID: ${BOT_UID:-10001}
+      TARGET_GID: ${BOT_GID:-10001}
+    volumes:
+      - miniapp-data:/miniapp-data
+      - miniapp-backups:/miniapp-backups
+      - caddy-data:/data
+      - caddy-config:/config
+  api:
+    <<: [*api-image, *hardening]
+    user: '${BOT_UID:-10001}:${BOT_GID:-10001}'
+    restart: unless-stopped
+    stop_grace_period: 30s
+    mem_limit: ${MINIAPP_API_MEMORY:-256m}
+    cpus: ${MINIAPP_API_CPUS:-0.5}
+    pids_limit: 64
+    depends_on:
+      miniapp-storage-init: {condition: service_completed_successfully}
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set server-side TELEGRAM_BOT_TOKEN}
+      MINIAPP_DB_PATH: /catalog/bot.db
+      MINIAPP_USER_DB_PATH: /miniapp-data/miniapp.db
+      MINIAPP_AUTH_TTL: ${MINIAPP_AUTH_TTL:-3600}
+      MINIAPP_USER_RATE_LIMIT: ${MINIAPP_USER_RATE_LIMIT:-120}
+      MINIAPP_GLOBAL_RATE_LIMIT: ${MINIAPP_GLOBAL_RATE_LIMIT:-600}
+    volumes:
+      - bot-catalog:/catalog:ro
+      - miniapp-data:/miniapp-data
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=16m,mode=1777']
+    networks: [api-private]
+    healthcheck:
+      test: ['CMD', 'python', '-m', 'miniapp.backend.healthcheck']
+      interval: 30s
+      timeout: 6s
+      start_period: 15s
+      retries: 3
+  web:
+    <<: *hardening
+    image: ${MINIAPP_WEB_IMAGE:-it-radar-miniapp-web:local}
+    build:
+      context: .
+      dockerfile: miniapp/deploy/Dockerfile
+      args:
+        VITE_BOT_USERNAME: ${VITE_BOT_USERNAME:-it_start_radar_bot}
+    user: '${BOT_UID:-10001}:${BOT_GID:-10001}'
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: ${MINIAPP_WEB_MEMORY:-128m}
+    cpus: ${MINIAPP_WEB_CPUS:-0.5}
+    pids_limit: 64
+    depends_on:
+      api: {condition: service_healthy}
+    environment:
+      MINIAPP_DOMAIN: ${MINIAPP_DOMAIN:?Set the real DNS hostname without scheme or path}
+      XDG_DATA_HOME: /data
+      XDG_CONFIG_HOME: /config
+    ports:
+      - '${MINIAPP_BIND:-0.0.0.0}:${MINIAPP_HTTP_PORT:-80}:8080'
+      - '${MINIAPP_BIND:-0.0.0.0}:${MINIAPP_HTTPS_PORT:-443}:8443'
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=16m,mode=1777']
+    networks: [api-private, web-egress]
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O', '/dev/null', 'http://127.0.0.1:8081/_health']
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+  maintenance:
+    <<: [*api-image, *hardening]
+    profiles: [maintenance]
+    user: '${BOT_UID:-10001}:${BOT_GID:-10001}'
+    entrypoint: ['python', '-m', 'miniapp.backend.maintenance']
+    network_mode: none
+    mem_limit: 128m
+    pids_limit: 32
+    environment:
+      MINIAPP_DB_PATH: /catalog/bot.db
+      MINIAPP_USER_DB_PATH: /miniapp-data/miniapp.db
+    volumes:
+      - miniapp-data:/miniapp-data
+      - miniapp-backups:/miniapp-backups
+    tmpfs: ['/tmp:rw,noexec,nosuid,size=16m,mode=1777']
+networks:
+  api-private: {internal: true}
+  web-egress: {}
+volumes:
+  # external prevents creation of an empty replacement for the live bot database.
+  bot-catalog:
+    external: true
+    name: ${BOT_DATA_VOLUME:?Set the exact EXISTING bot data volume name}
+  miniapp-data: {}
+  miniapp-backups: {}
+  caddy-data: {}
+  caddy-config: {}

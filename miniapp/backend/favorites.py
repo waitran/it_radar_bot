@@ -4,16 +4,12 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from .storage import protect_catalog, storage_lock
 
 
 class Favorites:
     def __init__(self, path, catalog_path):
-        self.path = Path(path).resolve()
-        catalog = Path(catalog_path).resolve()
-        protected = [catalog] + [Path(str(catalog) + suffix) for suffix in ('-wal', '-shm', '-journal', '.lock')]
-        for other in protected:
-            if self.path == other or (self.path.exists() and other.exists() and os.path.samefile(self.path, other)):
-                raise ValueError('MINIAPP_USER_DB_PATH must be separate from catalog storage')
+        self.path = protect_catalog(path, catalog_path)
         self.uri = self.path.as_uri() + '?mode=rw'
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -22,7 +18,7 @@ class Favorites:
                 os.close(fd)
             except FileExistsError:
                 pass
-            with self.connect() as conn:
+            with storage_lock(self.path), self.connect() as conn:
                 # Inspect before any mutating PRAGMA, even for an accidentally selected unrelated DB.
                 existing = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
                 if conn.execute('PRAGMA user_version').fetchone()[0] > 1 or existing - {'favorites'}:

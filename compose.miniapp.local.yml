@@ -1,0 +1,18 @@
+# LOCAL TESTS ONLY. Compose >= 2.24.4. Never use with a public bind address.
+services:
+  web:
+    ports: !override
+      - '127.0.0.1:${MINIAPP_LOCAL_PORT:-18080}:8080'
+    volumes:
+      - ./miniapp/deploy/Caddyfile.local:/etc/caddy/Caddyfile:ro
+    healthcheck:
+      interval: 2s
+      timeout: 5s
+      start_period: 2s
+      retries: 5
+  api:
+    healthcheck:
+      interval: 2s
+      timeout: 6s
+      start_period: 5s
+      retries: 10
