@@ -54,6 +54,10 @@ class BackgroundCollectionTests(unittest.TestCase):
                 handle_update(bot,{'update_id':1,'message':{'from':{'id':101},'chat':{'id':101,'type':'private'},'text':'/status'}})
                 self.assertTrue(reply_sent.wait(5),'command answer waited for the blocked source')
                 self.assertTrue(bot.db.user(101)['is_active'])
+                import json
+                from app.healthcheck import health_path,evaluate
+                state=json.loads(health_path(bot.cfg.db_path).read_text())
+                self.assertTrue(evaluate(state)[0])
             finally:
                 bot.stop_event.set();release.set();runner.join(5)
             self.assertFalse(runner.is_alive())

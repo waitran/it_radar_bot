@@ -82,6 +82,7 @@ class Config:
     backup_dir: str = ""
     backup_interval_seconds: int = 86400
     backup_keep: int = 7
+    max_queue_age_seconds: int = 86400
 
     def validate_runtime(self) -> None:
         """Validate startup credentials without contacting Telegram or echoing values."""
@@ -192,4 +193,5 @@ class Config:
             backup_dir=backup_dir,
             backup_interval_seconds=Config._env_int("BACKUP_INTERVAL_SECONDS", "86400"),
             backup_keep=Config._env_int("BACKUP_KEEP", "7",minimum=2),
+            max_queue_age_seconds=Config._env_int("MAX_QUEUE_AGE_SECONDS", "86400"),
         )

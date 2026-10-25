@@ -10,12 +10,19 @@ services:
       DB_PATH: /data/bot.db
       BACKUP_DIR: /backups
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+      MAX_QUEUE_AGE_SECONDS: ${MAX_QUEUE_AGE_SECONDS:-86400}
       BACKUP_KEEP: ${BACKUP_KEEP:-7}
       REQUEST_TIMEOUT_SECONDS: ${REQUEST_TIMEOUT_SECONDS:-30}
       USER_AGENT: ${USER_AGENT:-Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36}
       ITEM_VERIFICATION_TTL_SECONDS: ${ITEM_VERIFICATION_TTL_SECONDS:-300}
       SOURCE_TIMEOUT_SECONDS: ${SOURCE_TIMEOUT_SECONDS:-600}
       POLL_INTERVAL_SECONDS: ${POLL_INTERVAL_SECONDS:-3600}
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3
     volumes:
       - bot-data:/data
       - ${BACKUP_HOST_PATH:-./backups}:/backups

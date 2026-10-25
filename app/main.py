@@ -26,6 +26,7 @@ from app.collectors.base import collection_scope, check_collection, CollectionCa
 from app.config import Config, ConfigurationError
 from app.db import Database
 from app.backup import create_backup, BackupCancelled
+from app.healthcheck import health_path, write_health
 from app.filters import Filters
 from app.models import Item
 from app.notify import TelegramNotifier, BotAPIError
@@ -78,6 +79,16 @@ class Bot:
         self._source_verify_after = {}
         self._source_locks = {}
         self.backup_error = None
+        self._health_ready = False
+        self._started_at = time.time()
+        self._dispatcher_at = self._started_at
+        self._health_write_at = 0.0
+        self._poll_expected = False
+        self._poll_at = self._started_at
+        self._poll_retry_until = 0.0
+        self._source_deadlines = {}
+        self._last_report = None
+        self._scan_error = False
         try:
             self.db.migrate_owner(cfg.owner_id)
         except Exception:
@@ -211,6 +222,7 @@ class Bot:
                 self.db.set_flag("check_in_progress", "1")
                 self.db.set_flag("check_pending", "0")
         summary = "Проверка прервана ошибкой. Состояние сохранено; подробности — /status и логи."
+        report = None
         try:
             report = self._run_cycle()
             summary = (f"{'Проверка прервана' if self.stop_event.is_set() else 'Проверка завершена'}.\n"
@@ -226,6 +238,9 @@ class Bot:
             return report
         finally:
             with self._lock:
+                if report is not None:
+                    self._last_report = dict(attempted=report['attempted'],successful=report['successful'])
+                    self._scan_error = False
                 if requested and not self.stop_event.is_set():
                     self.db.set_flag("check_summary", summary)
                     self.db.set_flag("check_summary_pending", "1")
@@ -243,7 +258,15 @@ class Bot:
         with self._lock:
             source_lock = self._source_locks.setdefault(key,threading.RLock())
         with source_lock, self._collection_scope():
-            yield
+            identity=threading.get_ident()
+            with self._lock:
+                outer=identity not in self._source_deadlines
+                if outer:self._source_deadlines[identity]=time.time()+self.cfg.source_timeout_seconds+2*self.cfg.request_timeout_seconds+30
+            try:
+                yield
+            finally:
+                if outer:
+                    with self._lock:self._source_deadlines.pop(identity,None)
 
     def _defer_verification(self, key, source, timestamp):
         with self._lock:
@@ -675,6 +698,19 @@ class Bot:
         return {'attempted': len(checked_keys), 'successful': successful, 'found': found,
                 'matched': matched, 'new': new_count, 'sent': notified, 'errors': errors}
 
+    def _write_health(self):
+        with self._lock:
+            state=dict(version=1,ready=self._health_ready,updated_at=time.time(),
+                started_at=self._started_at,dispatcher_at=self._dispatcher_at,
+                poll_expected=self._poll_expected,poll_at=self._poll_at,poll_retry_until=self._poll_retry_until,
+                source_deadlines=list(self._source_deadlines.values()),scan_report=self._last_report,
+                scan_error=self._scan_error,queue=self.db.health_metrics(),
+                max_queue_age=self.cfg.max_queue_age_seconds,backup_enabled=bool(self.cfg.backup_dir),
+                backup_error=self.backup_error,last_backup_at=float(self.db.get_flag('last_backup_at','0')),
+                backup_interval=self.cfg.backup_interval_seconds)
+        write_health(health_path(self.cfg.db_path),state)
+        self._health_write_at=time.monotonic()
+
     def _backup_loop(self, stop):
         next_attempt = 0.0
         while not stop.is_set():
@@ -704,6 +740,7 @@ class Bot:
                 try:
                     self.run_cycle()
                 except Exception:
+                    self._scan_error = True
                     log.exception("Ошибка сбора; состояние источников сохранено")
                 next_scan = time.monotonic()+self.cfg.poll_interval_seconds
             stop.wait(0.2)
@@ -712,6 +749,8 @@ class Bot:
         # Only the scanner collects full snapshots. The calling thread services
         # the durable outboxes while a source is waiting on network I/O.
         self._background_collection = True
+        self._health_ready = True
+        self._health_write_at = 0.0
         scanner = threading.Thread(target=self._scan_loop,args=(stop,),daemon=True,name='collector')
         verifier = threading.Thread(target=self._verification_loop,args=(stop,),daemon=True,name='verifier')
         workers = [scanner,verifier]
@@ -720,15 +759,22 @@ class Bot:
         for worker in workers:worker.start()
         try:
             while not stop.is_set():
+                self._dispatcher_at=time.time()
                 try:
                     self.dispatch_pending()
                 except Exception:
                     log.exception("Ошибка доставки; состояние очереди сохранено")
+                if time.monotonic()-self._health_write_at >= 10:
+                    try:self._write_health()
+                    except Exception as exc:log.error('Heartbeat недоступен (%s)',type(exc).__name__)
                 stop.wait(2)
         finally:
             stop.set()
             for worker in workers:worker.join()
             self._background_collection = False
+            self._health_ready = False
+            try:self._write_health()
+            except Exception:pass
 
 
 HELP = ("/start — включить уведомления\n/status — состояние подписки\n"
@@ -792,6 +838,8 @@ def handle_update(bot, upd):
 def poll_updates(bot, stop):
     while not stop.is_set():
         try:
+            bot._poll_at=time.time()
+            bot._poll_retry_until=0.0
             updates=bot.notifier.call("getUpdates",{"offset":int(bot.db.get_flag("offset","0")),
                                       "timeout":25,"allowed_updates":["message"]},timeout=35)
             if not isinstance(updates,list):
@@ -807,6 +855,7 @@ def poll_updates(bot, stop):
                 stop.set()
                 return
             log.warning("Опрос команд недоступен: код %s",exc.code)
+            bot._poll_retry_until=time.time()+max(5,exc.retry_after)
             stop.wait(max(5,exc.retry_after))
         except Exception:
             log.exception("Ошибка обработки команд")
@@ -880,12 +929,14 @@ def main() -> None:
     signal.signal(signal.SIGTERM, lambda *a: stop.set())
     signal.signal(signal.SIGINT, lambda *a: stop.set())
 
+    bot._write_health()
     try:
         bot.initialize()
     except Exception:
         bot.db.close()
         raise
     poller = threading.Thread(target=poll_updates, args=(bot, stop), daemon=True, name="poller")
+    bot._poll_expected = True
     poller.start()
     log.info("it-radar-bot запущен: %d каналов, %d сайтов, интервал %d c",
              len(cfg.channels), len(cfg.websites), cfg.poll_interval_seconds)

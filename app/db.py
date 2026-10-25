@@ -510,6 +510,15 @@ class Database:
         with self._lock:
             return self._conn.execute("SELECT 1 FROM user_deliveries WHERE item_key=?", (item_key,)).fetchone() is not None
 
+    def health_metrics(self):
+        with self._lock:
+            row=self._conn.execute("""SELECT COUNT(*) AS ready,MIN(COALESCE(s.eligible_at,
+                    (julianday(s.first_seen_at)-2440587.5)*86400)) AS oldest
+                FROM user_deliveries d JOIN seen_items s ON s.item_key=d.item_key
+                WHERE d.status IN ('pending','sending')""").fetchone()
+            return dict(ready=row['ready'],oldest_ready_at=
+                        row['oldest'] if row['oldest'] is not None else None)
+
     def multi_delivery_counts(self, telegram_id=None):
         with self._lock:
             if telegram_id is None:
