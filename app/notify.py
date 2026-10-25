@@ -81,3 +81,4 @@ class TelegramNotifier:
     @staticmethod
     def escape(value):
         return html.escape(value or '', quote=True)
+

@@ -198,3 +198,4 @@ class Filters:
             return False, "нет приглашения, заявки или предстоящего события"
         item.categories = categories
         return True, ""
+

@@ -45,3 +45,4 @@ class StorageInitTests(unittest.TestCase):
             self.assertEqual(path.stat().st_mode & 0o777,0o600)
             self.assertEqual(Path(str(path)+'.lock').stat().st_mode & 0o777,0o600)
         finally:db.close()
+

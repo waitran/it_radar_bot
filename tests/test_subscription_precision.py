@@ -40,3 +40,4 @@ class SubscriptionPrecisionTests(unittest.TestCase):
         self.assertIsNone(self.db.user_delivery(101,malformed.item_key))
         self.assertEqual(self.db.item_row(malformed.item_key)['delivery_state'],'legacy_review')
         self.assertIsNotNone(self.db.user_delivery(101,good.item_key))
+

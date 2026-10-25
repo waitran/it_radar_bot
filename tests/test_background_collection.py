@@ -103,3 +103,4 @@ class BackgroundCollectionTests(unittest.TestCase):
             finally:bot.stop_event.set();release.set();runner.join(5)
             self.assertFalse(runner.is_alive())
         self.assertEqual(bot.db.user_delivery(101,entry.item_key)['status'],'sent')
+

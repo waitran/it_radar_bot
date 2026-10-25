@@ -29,3 +29,4 @@ def identities(item):
         content = re.sub(r'\s+', ' ', item.title + '\n' + item.raw_text).strip().casefold()
         keys.add('text:' + item.source_key + ':' + hashlib.sha256(content.encode()).hexdigest())
     return sorted(keys)
+

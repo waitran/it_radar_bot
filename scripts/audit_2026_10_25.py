@@ -118,3 +118,4 @@ with tempfile.TemporaryDirectory() as directory,patch.dict(os.environ,{},clear=T
     bot.db.close()
 
 print(json.dumps(results,ensure_ascii=False,indent=2))
+

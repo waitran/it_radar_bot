@@ -66,3 +66,4 @@ class HistoryGapTests(unittest.TestCase):
         self.bot = Bot(self.cfg)
         self.assertEqual(self.bot.db.telegram_cursor('tg_example'),101)
         self.assertEqual(self.bot.db.get_flag('offset'),'77')
+

@@ -224,3 +224,4 @@ def fetch_post(username: str, post_id: int) -> Item | None:
         raise TelegramSourceError('Публичная страница для повторной проверки недоступна.')
     items, _ = _parse_page(response.text, username)
     return next((item for item in items if int(item.external_id) == post_id), None)
+

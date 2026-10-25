@@ -891,3 +891,4 @@ class Database(PersonalDatabase):
             if self._file_lock is not None:
                 self._file_lock.close()
                 self._file_lock = None
+

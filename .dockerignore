@@ -19,6 +19,7 @@
 !scripts/
 !scripts/check_repository.py
 
+
 # Read-only Mini App API is needed by its integration tests, not the bot runtime.
 !miniapp/
 !miniapp/__init__.py

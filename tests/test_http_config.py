@@ -107,3 +107,4 @@ class HttpConfigTests(unittest.TestCase):
             send.assert_called_once()
             self.assertEqual(send.call_args.kwargs['timeout'],9)
             self.assertEqual(send.call_args.kwargs['headers']['User-Agent'],'Cycle/9')
+

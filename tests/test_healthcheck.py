@@ -86,3 +86,4 @@ class HealthcheckTests(unittest.TestCase):
         self.assertEqual(evaluate(state,1001),(False,'disk_space_low'))
         state['min_free_disk_bytes']=0
         self.assertEqual(evaluate(state,1001),(True,'ok'))
+

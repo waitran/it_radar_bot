@@ -40,3 +40,4 @@ class CategoryConfigTests(unittest.TestCase):
             self.assertIn('rules.categories.internships.label',result.stderr)
             self.assertNotIn('private-invalid-value',result.stderr)
             self.assertFalse(db.exists())
+

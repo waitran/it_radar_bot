@@ -30,3 +30,4 @@ ENV HOME=/tmp
 USER 10001:10001
 
 CMD ["python", "-m", "app.main"]
+

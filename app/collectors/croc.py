@@ -117,3 +117,4 @@ class CrocCollector:
             published_at=published, deadline=deadline, source_deadline=deadline, registration_status='unknown',
             kind='vacancy', experience=text(tags) if tags else '',
         )
+

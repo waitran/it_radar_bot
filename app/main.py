@@ -1070,3 +1070,4 @@ if __name__ == "__main__":
     except Exception:
         log.exception("Не удалось запустить или продолжить работу бота")
         raise SystemExit(1) from None
+

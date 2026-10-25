@@ -135,3 +135,4 @@ class VerificationFreshnessTests(unittest.TestCase):
         with patch.object(self.bot,'_verify_item',side_effect=stale):self.bot._verification_loop(stop)
         self.assertIn(key,self.bot._verification_retries)
         self.assertNotIn(job,self.bot._verification_jobs)
+

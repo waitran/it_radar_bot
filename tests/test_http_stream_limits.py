@@ -178,3 +178,4 @@ class RedirectTransportTests(unittest.TestCase):
                 send.assert_called_once()
                 raw.read.assert_not_called()
                 self.assertTrue(raw.closed)
+

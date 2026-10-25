@@ -27,3 +27,4 @@ class RtkitCollector:
         except WebsiteSourceError as exc:
             raise WebsiteSourceError(f'РТК ИТ не подключён: публичный API недоступен. {exc}') from None
         raise WebsiteSourceError('РТК ИТ: доступ API изменился; интеграция данных ещё не проверена. Демоданные не используются.')
+

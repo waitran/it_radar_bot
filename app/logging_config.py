@@ -30,3 +30,4 @@ def configure_logging() -> None:
     handler.setFormatter(RedactingFormatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
     # The standalone application owns its output handlers, including library logs.
     logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+

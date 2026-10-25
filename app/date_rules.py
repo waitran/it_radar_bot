@@ -84,3 +84,4 @@ def date_evidence(publication: Item, text: str, now: datetime, tz: ZoneInfo) -> 
         previous_kind = kind
         previous_end = match.end() + (clock.end() if clock else 0)
     return list(dict.fromkeys(deadlines)), list(dict.fromkeys(events))
+

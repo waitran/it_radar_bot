@@ -47,3 +47,4 @@ class LegacyBackfillTests(unittest.TestCase):
         db=Database(self.path)
         try:self.assertEqual(db.get_flag('legacy_aliases_backfilled'),'1')
         finally:db.close()
+

@@ -107,3 +107,4 @@ def job_dates(soup):
             if kind == 'JobPosting' or isinstance(kind, list) and 'JobPosting' in kind:
                 return parse(item.get('datePosted')), parse(item.get('validThrough'), True)
     return None, None
+

@@ -109,3 +109,4 @@ class K2Collector:
             published_at=published, deadline=deadline, source_deadline=deadline, registration_status='unknown',
             kind='vacancy',
         )
+

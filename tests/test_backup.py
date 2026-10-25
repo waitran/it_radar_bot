@@ -108,3 +108,4 @@ class BackupTests(unittest.TestCase):
         self.assertEqual(bot.backup_error,'PermissionError')
         self.assertEqual(bot.db.get_flag('last_backup_at'),'0')
         self.assertEqual(bot.db.get_flag('offset'),'77')
+
