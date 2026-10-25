@@ -159,6 +159,32 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(self.decide('Приглашаем на митап Python', 'Митап состоится 20 октября')[0])
         self.assertTrue(self.decide('Митап Python', 'Митап состоится 25 октября')[0])
 
+    def test_past_dates_in_ctf_invitations_and_schedule_lines(self):
+        cases = [
+            ('Пермь, ваш выход!', '10 октября приходите на PERM CTF 2026. Зарегистрируйтесь!'),
+            ('Возьми телефон', 'Приходите 1 октября — принять участие в CTF.'),
+            ('Пентест инфраструктуры', 'Приглашаем на открытый урок.\n🗓 21 октября в 20:00 МСК'),
+            ('Митап Python', 'Приглашаем!\nДата: 21 октября'),
+            ('Семинар по SQL', 'Приглашаем!\n📆 21 октября'),
+        ]
+        for title, body in cases:
+            with self.subTest(title=title):
+                accepted, reason, _ = self.decide(title, body)
+                self.assertFalse(accepted, reason)
+                self.assertEqual(reason, 'дата мероприятия уже прошла')
+
+    def test_schedule_dates_keep_future_events_and_ranges(self):
+        for body in ['Приглашаем!\n🗓 23 октября в 20:00',
+                     'Дата: 23 октября', 'Приходите 23 октября',
+                     'Сроки проведения: с 20 по 23 октября',
+                     'Сроки проведения: 20–23 октября']:
+            with self.subTest(body=body):
+                self.assertTrue(self.decide('Митап Python', body)[0])
+
+    def test_unrelated_date_on_new_line_is_not_event_evidence(self):
+        self.assertTrue(self.decide('Приглашаем на митап Python',
+                                   'Компания основана\n21 октября 2000 года')[0])
+
     def test_keywords_can_extend_or_disable_categories(self):
         self.rules.categories = {'events': {'label':'События', 'keywords':['техзавтрак']}}
         accepted, reason, it = self.decide('Приглашаем на техзавтрак по SQL')

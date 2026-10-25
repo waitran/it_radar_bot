@@ -21,7 +21,9 @@ _DEADLINE_CONTEXT = re.compile(
     r"(?:при[её]м|подача)\s+заявок\s*[:—–-]?\s*$|(?:apply|applications?)[^\n.!?;]{0,40}by\s*$",
     re.I,
 )
-_EVENT_CONTEXT = re.compile(r"\bкогда\b|финал|митап|встреч|конференц|хакатон|лекц|соревнован|олимпиад|конкурс|вебинар|пройд[её]т|состоится|начн[её]тся|\b(?:meetup|conference|event|hackathon|webinar)\b", re.I)
+_EVENT_CONTEXT = re.compile(r"\bкогда\b|финал|митап|встреч|конференц|хакатон|лекц|соревнован|олимпиад|конкурс|вебинар|семинар|воркшоп|урок|сборы|приходи|присоедин|дата проведения|сроки проведения|пройд[её]т|состоится|начн[её]тся|\b(?:meetup|conference|event|hackathon|webinar|ctf)\b", re.I)
+
+_SCHEDULE_LINE = re.compile(r"^\s*[📅🗓🗓️📆\s]*(?:(?:дата|когда|время|начало|сроки проведения)\s*[:—–-]\s*|[📅🗓📆]\ufe0f?\s*)$", re.I)
 
 
 def _aware(value: datetime, tz: ZoneInfo) -> datetime:
@@ -74,7 +76,9 @@ def date_evidence(publication: Item, text: str, now: datetime, tz: ZoneInfo) -> 
         if _DEADLINE_CONTEXT.search(clause) or inherited == "deadline":
             deadlines.append(value)
             kind = "deadline"
-        elif inherited == "event" or _EVENT_CONTEXT.search(clause) or _EVENT_CONTEXT.search(text[match.end():match.end() + 65].split("\n")[0]):
+        elif (inherited == "event"
+              or (_SCHEDULE_LINE.fullmatch(clause) and _EVENT_CONTEXT.search(text))
+              or _EVENT_CONTEXT.search(clause) or _EVENT_CONTEXT.search(text[match.end():match.end() + 65].split("\n")[0])):
             events.append(value)
             kind = "event"
         previous_kind = kind
