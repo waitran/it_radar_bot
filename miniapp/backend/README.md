@@ -1,4 +1,8 @@
-# Backend Mini App — этап 1
+# Backend Mini App — этапы 1–3
+
+Избранное хранится в отдельном `MINIAPP_USER_DB_PATH` (по умолчанию `/data/miniapp.db`).
+API-процессу нужен writable доступ к этой базе. Подробности endpoints, схемы и
+интеграции с ботом: [этап 3](../../docs/miniapp-stage3.md).
 
 Запускать из корня `it_radar_bot`, Python 3.12:
 

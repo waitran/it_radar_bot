@@ -10,6 +10,7 @@ from pathlib import Path
 
 import yaml
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from app.miniapp import validate_url
 
 
 DEFAULT_REQUEST_TIMEOUT = 30
@@ -84,11 +85,17 @@ class Config:
     backup_keep: int = 7
     max_queue_age_seconds: int = 86400
     min_free_disk_bytes: int = 1073741824
+    miniapp_url: str = ''
+    miniapp_menu_button: bool = False
 
     def validate_runtime(self) -> None:
         """Validate startup credentials without contacting Telegram or echoing values."""
         if not re.fullmatch(r"[0-9]+:[A-Za-z0-9_-]{20,}", self.bot_token):
             raise ConfigurationError("Задайте корректный TELEGRAM_BOT_TOKEN в окружении.")
+        try:
+            validate_url(self.miniapp_url)
+        except ValueError:
+            raise ConfigurationError('MINIAPP_URL должен быть корректным HTTPS URL.') from None
         if self.owner_id < 0:
             raise ConfigurationError("OWNER_TELEGRAM_ID должен быть положительным числовым ID владельца.")
         if not self.db_path.strip():
@@ -179,7 +186,15 @@ class Config:
         backup_dir = os.environ.get("BACKUP_DIR", "")
         if backup_dir and (not backup_dir.strip() or Path(backup_dir).resolve().is_relative_to(Path(db_path).resolve().parent)):
             raise ConfigurationError("BACKUP_DIR должен быть вне каталога DB_PATH.")
+        try:
+            miniapp_url = validate_url(os.environ.get('MINIAPP_URL', ''))
+        except ValueError:
+            raise ConfigurationError('MINIAPP_URL должен быть корректным HTTPS URL.') from None
+        menu_value = os.environ.get('MINIAPP_MENU_BUTTON', '0')
+        if menu_value not in ('0', '1'):
+            raise ConfigurationError('MINIAPP_MENU_BUTTON должен быть 0 или 1.')
         return Config(
+            miniapp_url=miniapp_url, miniapp_menu_button=menu_value == '1',
             bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
             owner_id=Config._env_int("OWNER_TELEGRAM_ID", "0", minimum=0),
             db_path=db_path,

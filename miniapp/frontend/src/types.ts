@@ -20,6 +20,7 @@ export interface Event {
   event_precision: "date" | "time" | null;
   deadline_precision: "date" | "time" | null;
   registration_status: string;
+  is_favorite: boolean;
 }
 export interface EventPage {
   items: Event[];
@@ -45,3 +46,19 @@ export const categoryNames: Record<Category, string> = {
   contests: "Конкурсы",
   career: "Карьера",
 };
+
+export interface Favorite {
+  item_key: string;
+  created_at: string;
+  event: Event | null;
+}
+export interface FavoritePage {
+  items: Favorite[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+export interface FavoriteState {
+  id: string;
+  is_favorite: boolean;
+}

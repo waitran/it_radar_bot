@@ -1,4 +1,11 @@
-import type { Event, EventPage, Filters, User } from "./types";
+import type {
+  Event,
+  EventPage,
+  Filters,
+  User,
+  FavoritePage,
+  FavoriteState,
+} from "./types";
 import { getInitData } from "./telegram";
 
 export class ApiError extends Error {
@@ -54,6 +61,7 @@ async function schedule(signal: AbortSignal) {
 export async function request<T>(
   path: string,
   signal: AbortSignal,
+  method: "GET" | "PUT" | "DELETE" = "GET",
 ): Promise<T> {
   const initData = getInitData();
   if (!initData) throw new ApiError(401, "Telegram session required");
@@ -67,6 +75,7 @@ export async function request<T>(
     await schedule(controller.signal);
     const response = await fetch(`/api${path}`, {
       signal: controller.signal,
+      method,
       headers: { Authorization: `tma ${initData}`, Accept: "application/json" },
       cache: "no-store",
       credentials: "omit",
@@ -80,6 +89,14 @@ export async function request<T>(
   }
 }
 export const api = {
+  favorites: (page: number, signal: AbortSignal) =>
+    request<FavoritePage>(`/favorites?page=${page}&page_size=12`, signal),
+  setFavorite: (id: string, saved: boolean, signal: AbortSignal) =>
+    request<FavoriteState>(
+      `/favorites/${encodeURIComponent(id)}`,
+      signal,
+      saved ? "PUT" : "DELETE",
+    ),
   me: (signal: AbortSignal) => request<User>("/me", signal),
   events: (filters: Filters, page: number, signal: AbortSignal, size = 12) => {
     const query = new URLSearchParams({

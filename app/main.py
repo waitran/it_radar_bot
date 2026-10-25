@@ -3,7 +3,7 @@
 сайты компаний) и присылает подписчикам новые подходящие объявления.
 
 Запуск:  python -m app.main          (токен — из переменных окружения)
-Команды: /start, /stop, /status, /settings, /saved, /week, /reminders, /help.
+Команды: /app, /start, /stop, /status, /settings, /saved, /week, /reminders, /help.
 """
 from __future__ import annotations
 
@@ -31,6 +31,7 @@ from app.filters import Filters
 from app.models import Item
 from app.preferences import matches
 from app.keyboards import save_keyboard
+from app.miniapp import launch_keyboard
 from app.agenda import render
 from app.callbacks import handle_callback, consume_input
 from app.reminders import format_reminder
@@ -129,9 +130,18 @@ class Bot:
                     ('start','Включить уведомления'),('stop','Выключить уведомления и напоминания'),
                     ('status','Статус подписки'),('settings','Персональные фильтры'),
                     ('saved','Избранные мероприятия'),('week','Афиша на семь дней'),
-                    ('reminders','Управление напоминаниями'),('help','Справка')]]})
+                    ('reminders','Управление напоминаниями'),('app','Открыть IT Radar'),('help','Справка')]]})
         except BotAPIError:
             log.warning('Не удалось обновить меню команд Telegram',exc_info=True)
+
+        if self.cfg.miniapp_url and self.cfg.miniapp_menu_button:
+            try:
+                # Startup metadata call: no SQLite/bot lock is held. No polling process is started.
+                self.notifier.call('setChatMenuButton', {'menu_button': {
+                    'type': 'web_app', 'text': '📱 Открыть IT Radar',
+                    'web_app': {'url': self.cfg.miniapp_url}}})
+            except BotAPIError:
+                log.warning('Не удалось настроить кнопку меню Mini App')
 
     def _transmit(self, message, telegram_id, *, version, timestamp, reply_markup=None):
         """Caller owns _send_lock, never _lock, while Telegram is in flight."""
@@ -857,7 +867,7 @@ class Bot:
             except Exception:pass
 
 
-HELP = ("/settings — персональные фильтры\n/saved — избранное\n/week — афиша на неделю\n/reminders — напоминания\n"
+HELP = ("/app — открыть IT Radar Mini App\n/settings — персональные фильтры\n/saved — избранное\n/week — афиша на неделю\n/reminders — напоминания\n"
         "/start — включить уведомления\n/status — состояние подписки\n"
         "/stop — отключить уведомления\n/help — помощь")
 WELCOME = ("Привет! 👋\n\nЯ IT Radar — бот, который помогает находить стажировки, "
@@ -902,6 +912,11 @@ def handle_update(bot, upd):
             if command == '/start':
                 active = True
                 reply = WELCOME + help_text[len(HELP):]
+                markup = launch_keyboard(bot.cfg.miniapp_url)
+            elif command == '/app':
+                markup = launch_keyboard(bot.cfg.miniapp_url)
+                reply = ('Каталог IT Radar и ваше избранное — в Mini App.' if markup
+                         else 'Mini App пока не настроен. Основные команды бота продолжают работать. /help — помощь.')
             elif command == '/stop':
                 active = False
                 reply = 'Уведомления отключены, будущие напоминания отменены. Избранное сохранено. /start — возобновить без рассылки архива.'
@@ -919,6 +934,7 @@ def handle_update(bot, upd):
                          f"Неизвестный результат: {counts.get('uncertain',0)}.\n" + help_text)
             elif command == '/help':
                 reply = 'IT Radar присылает новые подходящие IT-возможности.\n' + help_text
+                markup = launch_keyboard(bot.cfg.miniapp_url)
             elif command == '/check' and telegram_id == bot.cfg.owner_id:
                 accepted, reply = bot.check_request_reply(time.time())
                 if accepted:

@@ -47,6 +47,8 @@ services:
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Задайте TELEGRAM_BOT_TOKEN в .env или окружении}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:-0}
+      MINIAPP_URL: ${MINIAPP_URL:-}
+      MINIAPP_MENU_BUTTON: ${MINIAPP_MENU_BUTTON:-0}
       DB_PATH: /data/bot.db
       BACKUP_DIR: /backups
       BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}

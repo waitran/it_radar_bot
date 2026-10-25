@@ -7,6 +7,7 @@ import {
   FileText,
   Info,
 } from "lucide-react";
+import { FavoriteButton } from "../components/FavoriteButton";
 import { api } from "../api";
 import { useResource } from "../hooks";
 import { categoryNames } from "../types";
@@ -52,6 +53,7 @@ export function Detail({ id, onBack }: { id: string; onBack: () => void }) {
                 <p className="muted">Источник не указан</p>
               )}
             </div>
+            <FavoriteButton id={event.id} saved={event.is_favorite} />
             <div className="date-facts">
               <div>
                 <FileText size={18} />

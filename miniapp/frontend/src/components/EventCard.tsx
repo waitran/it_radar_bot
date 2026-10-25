@@ -1,13 +1,16 @@
 import { ArrowUpRight, CalendarDays, Clock3 } from "lucide-react";
 import { categoryNames, type Event } from "../types";
 import { formatDate, sourceLabel } from "../format";
-import { categoryIcons } from "./common";
+import { categoryIcons, ExternalLink } from "./common";
+import { FavoriteButton } from "./FavoriteButton";
 
 export function EventCard({
   event,
   onOpen,
+  showOriginal = false,
 }: {
   event: Event;
+  showOriginal?: boolean;
   onOpen: (id: string) => void;
 }) {
   const category = event.categories[0];
@@ -21,9 +24,7 @@ export function EventCard({
           <Icon size={14} />
           {categoryNames[category] || "Возможность"}
         </span>
-        <span className="card-arrow" aria-hidden="true">
-          <ArrowUpRight size={18} />
-        </span>
+        <FavoriteButton id={event.id} saved={event.is_favorite} compact />
       </div>
       <button className="card-title" onClick={() => onOpen(event.id)}>
         <h3>{event.title || "Без названия"}</h3>
@@ -43,6 +44,12 @@ export function EventCard({
           <span>{eventDate}</span>
         </p>
       ) : null}
+      {showOriginal && (
+        <ExternalLink href={event.url} className="card-original">
+          Открыть оригинал
+          <ArrowUpRight size={14} />
+        </ExternalLink>
+      )}
       <div className="card-footer">
         <span className="source-name">
           <span className="source-mark" aria-hidden="true">

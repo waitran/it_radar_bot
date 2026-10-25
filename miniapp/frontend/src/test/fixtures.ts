@@ -20,6 +20,7 @@ export const event: Event = {
   event_precision: null,
   deadline_precision: null,
   registration_status: "unknown",
+  is_favorite: false,
 };
 export const result: EventPage = {
   items: [event],

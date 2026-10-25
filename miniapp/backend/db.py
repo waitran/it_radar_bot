@@ -48,7 +48,7 @@ class Catalog:
         with self.connect() as conn:
             conn.execute('SELECT item_key,payload FROM seen_items LIMIT 1').fetchone()
 
-    def select(self, *, q='', category=None, active_only=False, page=1, page_size=20, sort='desc', key=None):
+    def select(self, *, q='', category=None, active_only=False, page=1, page_size=20, sort='desc', key=None, keys=None):
         with self.connect() as conn:
             tables = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             indexed = {'event_metadata', 'item_refs'} <= tables
@@ -70,6 +70,12 @@ class Catalog:
             if key is not None:
                 where.append('s.item_key=?')
                 params.append(key)
+            if keys is not None:
+                if not keys:
+                    where.append('0')
+                else:
+                    where.append('s.item_key IN (' + ','.join('?' for _ in keys) + ')')
+                    params.extend(keys)
             if active_only:
                 # Unknown dates/status do not prove an opportunity is still actionable.
                 if indexed:

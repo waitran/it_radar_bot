@@ -60,6 +60,30 @@ describe("API transport", () => {
       expect.anything(),
     );
   });
+  it("uses authenticated idempotent PUT and DELETE for favorites", async () => {
+    const saved = client.api.setFavorite(
+      "source:a/b",
+      true,
+      new AbortController().signal,
+    );
+    await vi.runAllTimersAsync();
+    await saved;
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/favorites/source%3Aa%2Fb",
+      expect.objectContaining({ method: "PUT" }),
+    );
+    const removed = client.api.setFavorite(
+      "source:a/b",
+      false,
+      new AbortController().signal,
+    );
+    await vi.runAllTimersAsync();
+    await removed;
+    expect(fetch).toHaveBeenLastCalledWith(
+      "/api/favorites/source%3Aa%2Fb",
+      expect.objectContaining({ method: "DELETE" }),
+    );
+  });
   it("limits request starts to 250ms intervals", async () => {
     const times: number[] = [];
     vi.mocked(fetch).mockImplementation(async () => {

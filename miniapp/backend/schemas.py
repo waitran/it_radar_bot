@@ -23,6 +23,7 @@ class Event(BaseModel):
     event_precision: str | None
     deadline_precision: str | None
     registration_status: str
+    is_favorite: bool = False
 
 
 class EventPage(BaseModel):
@@ -30,3 +31,21 @@ class EventPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class Favorite(BaseModel):
+    item_key: str
+    created_at: datetime
+    event: Event | None
+
+
+class FavoritePage(BaseModel):
+    items: list[Favorite]
+    total: int
+    page: int
+    page_size: int
+
+
+class FavoriteState(BaseModel):
+    id: str
+    is_favorite: bool

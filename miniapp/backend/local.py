@@ -23,7 +23,7 @@ def main():
         finally:
             source.close()
             target.close()
-        uvicorn.run(create_app(replace(settings, db_path=str(snapshot))),
+        uvicorn.run(create_app(replace(settings, db_path=str(snapshot), user_db_path=str(Path(directory)/'miniapp.db'))),
                     host='127.0.0.1', port=8765, access_log=False)
 
 

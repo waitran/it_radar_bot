@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useState } from "react";
 export type Route =
-  | { screen: "home" | "catalog" | "profile" }
-  | { screen: "event"; id: string };
+  | { screen: "home" | "catalog" | "profile" | "favorites" }
+  | { screen: "event"; id: string; from?: "home" | "catalog" | "favorites" };
 function readRoute(): Route {
   const path = window.location.pathname;
   if (path === "/catalog") return { screen: "catalog" };
+  if (path === "/favorites") return { screen: "favorites" };
   if (path === "/profile") return { screen: "profile" };
   if (path.startsWith("/events/")) {
     try {
-      return { screen: "event", id: decodeURIComponent(path.slice(8)) };
+      return {
+        screen: "event",
+        id: decodeURIComponent(path.slice(8)),
+        from: ["home", "favorites"].includes(history.state?.from)
+          ? history.state.from
+          : "catalog",
+      };
     } catch {
       /* invalid link */
     }
@@ -35,7 +42,11 @@ export function useNavigation() {
     if (window.location.pathname === pathFor(next)) return;
     const depth = Number(history.state?.depth || 0) + (replace ? 0 : 1);
     history[replace ? "replaceState" : "pushState"](
-      { radar: true, depth },
+      {
+        radar: true,
+        depth,
+        from: next.screen === "event" ? next.from : undefined,
+      },
       "",
       pathFor(next),
     );
