@@ -8,6 +8,11 @@ RUN python -m pip --isolated install --index-url https://pypi.org/simple --no-ca
     && python -m pip check
 
 FROM dependencies AS test
+# Mini App dependencies exist only in the test stage, never in bot runtime.
+COPY miniapp/__init__.py ./miniapp/__init__.py
+COPY miniapp/backend ./miniapp/backend
+RUN python -m pip --isolated install --index-url https://pypi.org/simple --no-cache-dir -r miniapp/backend/requirements.txt \
+    && python -m pip check
 COPY app ./app
 COPY config.yaml .
 COPY tests ./tests
