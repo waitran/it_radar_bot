@@ -401,11 +401,23 @@ class Database:
                 # Seek by registry PK, not by history or filtered subscriber count.
                 # Ineligible and already-materialized users also advance the cursor.
                 page_limit = source_users
+                opportunity = None
+                if job['opportunity_at'] is not None:
+                    try:
+                        published=datetime.fromisoformat(job['opportunity_at'])
+                        if published.tzinfo is None:published=published.replace(tzinfo=timezone.utc)
+                        opportunity=published.timestamp()
+                    except (ValueError,OverflowError,TypeError):
+                        self._conn.execute("UPDATE seen_items SET delivery_state='legacy_review',delivery_reason='invalid_publication_time' WHERE item_key=?",(job['item_key'],))
+                        self._conn.execute("UPDATE user_deliveries SET status='legacy_review',reason='invalid_publication_time' WHERE item_key=? AND status IN ('pending','suspended')",(job['item_key'],))
+                        self._conn.execute('DELETE FROM delivery_fanout WHERE id=?',(job['id'],))
+                        self._put_flag('queue_dirty','1')
+                        continue
                 rows = self._conn.execute("""SELECT telegram_id,
                     (is_active=1 AND subscribed_at<=? AND (? IS NULL OR
-                        julianday(?)>julianday(subscribed_at,'unixepoch'))) AS eligible
+                        ?>subscribed_at)) AS eligible
                     FROM users WHERE telegram_id>? AND telegram_id<=? ORDER BY telegram_id LIMIT ?""",
-                    (job['eligible_at'],job['opportunity_at'],job['opportunity_at'],
+                    (job['eligible_at'],opportunity,opportunity,
                      job['cursor_id'],job['audience_max_id'],page_limit)).fetchall()
                 cursor = job['cursor_id']
                 for user in rows:
