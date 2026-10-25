@@ -17,6 +17,46 @@ telegram_channels:
   - key: rvision_team
     username: rvision_team
 
+  # Дополнительные публичные источники: первый снимок — baseline, без рассылки архива.
+  - key: tbank_education
+    username: tbank_education
+  - key: education_yandex
+    username: education_yandex
+  - key: hse_hack_club
+    username: hse_hack_club
+  - key: fcs_hse
+    username: fcs_hse
+  - key: it_sspace
+    username: it_sspace
+  - key: leaders_hack
+    username: leaders_hack
+  - key: hackathons_ai
+    username: hackathons_ai
+  - key: gis_cybersec
+    username: gis_cybersec
+  - key: careermiet
+    username: careermiet
+  - key: rtumirea_official
+    username: rtumirea_official
+  - key: competech
+    username: competech
+  - key: hackathonsrus
+    username: hackathonsrus
+  - key: hackathons
+    username: hackathons
+  - key: ctfnews
+    username: ctfnews
+  - key: russianhackers_channel
+    username: RussianHackers_Channel
+  - key: futru_it
+    username: futru_it
+  - key: freeitevent
+    username: freeitevent
+  - key: meetupochnaya
+    username: meetupochnaya
+  - key: stud_career
+    username: Stud_Career
+
 websites:
   # К2: публичный API каталога; КРОК: HTML с фильтром; РТК ИТ: API недоступен без авторизации.
   - key: k2_vacancy

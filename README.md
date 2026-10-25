@@ -80,7 +80,18 @@
 | [Ростелеком Технологии](https://t.me/rostelecom_tech) | [Молодёжь Ростелекома](https://t.me/rostelecom_molodezh) |
 | [CTDLru](https://t.me/CTDLru) | [mgtsstudents](https://t.me/mgtsstudents) |
 | [brainzbycroc](https://t.me/brainzbycroc) | [k2cybersec_team](https://t.me/k2cybersec_team) |
-| [rvision_team](https://t.me/rvision_team) | |
+| [rvision_team](https://t.me/rvision_team) | [tbank_education](https://t.me/tbank_education) |
+| [education_yandex](https://t.me/education_yandex) | [hse_hack_club](https://t.me/hse_hack_club) |
+| [fcs_hse](https://t.me/fcs_hse) | [it_sspace](https://t.me/it_sspace) |
+| [leaders_hack](https://t.me/leaders_hack) | [hackathons_ai](https://t.me/hackathons_ai) |
+| [gis_cybersec](https://t.me/gis_cybersec) | [careermiet](https://t.me/careermiet) |
+| [rtumirea_official](https://t.me/rtumirea_official) | [competech](https://t.me/competech) |
+| [hackathonsrus](https://t.me/hackathonsrus) | [hackathons](https://t.me/hackathons) |
+| [ctfnews](https://t.me/ctfnews) | [RussianHackers_Channel](https://t.me/RussianHackers_Channel) |
+| [futru_it](https://t.me/futru_it) | [freeitevent](https://t.me/freeitevent) |
+| [meetupochnaya](https://t.me/meetupochnaya) | [Stud_Career](https://t.me/Stud_Career) |
+
+В конфигурации 26 Telegram-каналов. `iteventsjuniors` не добавлен: публичная лента при проверке перенаправляла на страницу канала и не читалась сборщиком. Первый успешный снимок каждого нового источника создаёт baseline без рассылки архива; последующие новые публикации проходят общие правила отбора.
 
 ### Сайты компаний
 
