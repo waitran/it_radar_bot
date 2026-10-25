@@ -367,7 +367,8 @@ class CommandTests(BotFixture):
         handle_update(self.bot,self.update(7,'/stopper'))
         self.bot.service_message.assert_not_called()
         reply=self.bot.db.pending_reply(time.time())
-        self.assertEqual(reply['text'],'Неизвестная команда.\n'+HELP)
+        self.assertEqual(reply['text'],'Неизвестная команда.\n'+HELP\
+                         +'\n/check — проверить источники сейчас (только владелец)')
         self.assertEqual(reply['telegram_id'],123)
 
     def test_409_terminates_polling(self):

@@ -33,14 +33,14 @@ class TelegramNotifier:
     def __init__(self, bot_token: str, owner_id: int = 0):
         self.bot_token, self.owner_id = bot_token, owner_id
 
-    def send(self, text: str, chat_id: int | None = None) -> DeliveryResult:
+    def send(self, text: str, chat_id: int | None = None, *, reply_markup=None) -> DeliveryResult:
         chat_id = self.owner_id if chat_id is None else chat_id
         if not self.bot_token or chat_id <= 0:
             return DeliveryResult('failed', code=401)
         try:
             response = requests.post(API.format(token=self.bot_token, method='sendMessage'),
                 json={'chat_id': chat_id, 'text': text, 'parse_mode': 'HTML',
-                      'disable_web_page_preview': True}, timeout=(10,30), allow_redirects=False)
+                      'disable_web_page_preview': True, **({'reply_markup': reply_markup} if reply_markup else {})}, timeout=(10,30), allow_redirects=False)
         except requests.ConnectTimeout:
             return DeliveryResult('retry', retry_after=10)
         except requests.RequestException:

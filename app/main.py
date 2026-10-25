@@ -3,7 +3,7 @@
 сайты компаний) и присылает подписчикам новые подходящие объявления.
 
 Запуск:  python -m app.main          (токен — из переменных окружения)
-Команды: /start — включить рассылку, /stop — выключить, /status — личная подписка.
+Команды: /start, /stop, /status, /settings, /saved, /week, /reminders, /help.
 """
 from __future__ import annotations
 
@@ -29,6 +29,11 @@ from app.backup import create_backup, BackupCancelled
 from app.healthcheck import health_path, write_health, free_disk
 from app.filters import Filters
 from app.models import Item
+from app.preferences import matches
+from app.keyboards import save_keyboard
+from app.agenda import render
+from app.callbacks import handle_callback, consume_input
+from app.reminders import format_reminder
 from app.notify import TelegramNotifier, BotAPIError
 from app.formatting import format_message, escaped_clip
 from app.logging_config import configure_logging
@@ -45,7 +50,7 @@ WEBSITE_COLLECTORS = {
 class Bot:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.db = Database(cfg.db_path)
+        self.db = Database(cfg.db_path, metadata_timezone=cfg.rules.timezone)
         self.notifier = TelegramNotifier(cfg.bot_token, cfg.owner_id)
         self.filters = Filters(cfg.rules)
         # Флаг рассылки: /start включает, /stop выключает. Сохраняется в БД — переживает рестарт.
@@ -118,11 +123,20 @@ class Bot:
             raise RuntimeError("Webhook configured or invalid response; remove webhook explicitly before long polling")
         self.db.bind_identity("bot_id", me["id"])
         self.bot_username = me["username"].lower()
+        try:
+            self.notifier.call('setMyCommands', {'commands':[
+                {'command':command,'description':description} for command,description in [
+                    ('start','Включить уведомления'),('stop','Выключить уведомления и напоминания'),
+                    ('status','Статус подписки'),('settings','Персональные фильтры'),
+                    ('saved','Избранные мероприятия'),('week','Афиша на семь дней'),
+                    ('reminders','Управление напоминаниями'),('help','Справка')]]})
+        except BotAPIError:
+            log.warning('Не удалось обновить меню команд Telegram',exc_info=True)
 
-    def _transmit(self, message, telegram_id, *, version, timestamp):
+    def _transmit(self, message, telegram_id, *, version, timestamp, reply_markup=None):
         """Caller owns _send_lock, never _lock, while Telegram is in flight."""
         try:
-            result = self.notifier.send(message,chat_id=telegram_id)
+            result = self.notifier.send(message,chat_id=telegram_id, **({'reply_markup':reply_markup} if reply_markup else {}))
         except Exception:
             with self._lock:
                 self.db.set_flag('send_after',str(max(float(self.db.get_flag('send_after','0')),
@@ -139,7 +153,7 @@ class Bot:
                 self.stop_event.set()
         return result,completed
 
-    def service_message(self, text, telegram_id=None):
+    def service_message(self, text, telegram_id=None, *, reply_markup=None, formatted=False):
         telegram_id = self.cfg.owner_id if telegram_id is None else telegram_id
         if telegram_id <= 0:
             return
@@ -152,7 +166,7 @@ class Bot:
                 timestamp = time.time()
                 self.db.set_flag('send_after',str(timestamp+1.1))
                 self.db.set_flag('last_send_kind','command')
-            result,_ = self._transmit(escaped_clip(text,3800),telegram_id,version=version,timestamp=timestamp)
+            result,_ = self._transmit(text if formatted else escaped_clip(text,3800),telegram_id,version=version,timestamp=timestamp,reply_markup=reply_markup)
             return result
 
     def flush_command_reply(self):
@@ -164,7 +178,7 @@ class Bot:
                 if not row or not self.db.claim_command_reply(row['telegram_id'],time.time(),generation=row['generation']):
                     return False
             try:
-                result = self.service_message(row['text'],telegram_id=row['telegram_id'])
+                result = self.service_message(row['text'],telegram_id=row['telegram_id'], **({'reply_markup':json.loads(row['reply_markup']), 'formatted':True} if row['reply_markup'] else {}))
             except Exception:
                 with self._lock:
                     self.db.set_reply_state(row['telegram_id'],'uncertain',generation=row['generation'])
@@ -485,6 +499,9 @@ class Bot:
                 if not accepted:
                     self.db.finish_user_delivery(row['id'],'expired',reason)
                     return False
+                if not matches(self.db.preferences(telegram_id),item):
+                    self.db.finish_user_delivery(row['id'],'skipped','personal_preferences')
+                    return False
                 self.db.refresh_pending(item)
                 message = self.format_message(item)
                 if not self.db.claim_user_delivery(row['id'],now):
@@ -493,7 +510,7 @@ class Bot:
                 self.db.set_flag('send_after',str(max(now.timestamp(),time.time())+1.1))
                 self.db.set_flag('last_send_kind','event')
             try:
-                result,completed = self._transmit(message,telegram_id,version=user['subscription_version'],timestamp=now.timestamp())
+                result,completed = self._transmit(message,telegram_id,version=user['subscription_version'],timestamp=now.timestamp(),reply_markup=save_keyboard(self.db.item_ref(item.item_key)))
             except Exception:
                 with self._lock:
                     self.db.finish_user_delivery(row['id'],'uncertain','unexpected_send_error')
@@ -560,22 +577,56 @@ class Bot:
                 break
         return sent
 
+    def flush_reminder(self, *, now=None):
+        now = now or datetime.now(timezone.utc)
+        with self._send_lock:
+            with self._lock:
+                if self.stop_event.is_set() or float(self.db.get_flag('send_after','0')) > now.timestamp():
+                    return False
+                job = self.db.claim_reminder(now.timestamp())
+                if not job:
+                    return False
+                item = self.db.deserialize(job['payload'])
+                if item.explicitly_closed or item.registration_status == 'closed':
+                    self.db.finish_reminder(job,'cancelled')
+                    return False
+                message = format_reminder(item,job,self.db.preferences(job['telegram_id']))
+                self.db.set_flag('send_after',str(max(now.timestamp(),time.time())+1.1))
+                self.db.set_flag('last_send_kind','reminder')
+            try:
+                result,completed = self._transmit(message,job['telegram_id'],
+                    version=job['subscription_version'],timestamp=now.timestamp(),
+                    reply_markup=save_keyboard(job['item_id']))
+            except Exception:
+                log.exception('Ошибка отправки напоминания; результат uncertain')
+                with self._lock:self.db.finish_reminder(job,'uncertain')
+                return True
+            with self._lock:
+                self.db.finish_reminder(job,result.status,completed+max(10,result.retry_after),result.message_id)
+            return True
+
     def dispatch_pending(self, *, now=None):
-        """Alternate occupied HTTP slots between commands and events when both are ready."""
+        """Round robin HTTP slots across commands, publications and reminders."""
         now = now or datetime.now(timezone.utc)
         if self.stop_event.is_set() or float(self.db.get_flag('send_after','0')) > now.timestamp():
             return 0
         self.fill_delivery_queue(now)
-        if self.db.get_flag('last_send_kind') != 'command':
-            if self.flush_command_reply() or self.flush_check_summary():
-                return 0
-            return self.drain_pending(now=now)
-        sent = self.drain_pending(now=now)
-        # A rejected, retried or ambiguous event consumed a slot as well.
-        if float(self.db.get_flag('send_after','0')) <= now.timestamp():
-            if not self.flush_command_reply():
-                self.flush_check_summary()
-        return sent
+        kinds = ['command','event','reminder']
+        last = self.db.get_flag('last_send_kind')
+        index = (kinds.index(last)+1) % 3 if last in kinds else 0
+        for kind in kinds[index:]+kinds[:index]:
+            if kind == 'command':
+                if self.flush_command_reply() or self.flush_check_summary():
+                    return 0
+                sent = 0
+            elif kind == 'event':
+                sent = self.drain_pending(now=now)
+            else:
+                self.flush_reminder(now=now)
+                sent = 0
+            if float(self.db.get_flag('send_after','0')) > now.timestamp():
+                return sent
+        return 0
 
     def _run_cycle(self):
         started = datetime.now(timezone.utc)
@@ -806,7 +857,8 @@ class Bot:
             except Exception:pass
 
 
-HELP = ("/start — включить уведомления\n/status — состояние подписки\n"
+HELP = ("/settings — персональные фильтры\n/saved — избранное\n/week — афиша на неделю\n/reminders — напоминания\n"
+        "/start — включить уведомления\n/status — состояние подписки\n"
         "/stop — отключить уведомления\n/help — помощь")
 WELCOME = ("Привет! 👋\n\nЯ IT Radar — бот, который помогает находить стажировки, "
            "хакатоны, конференции, конкурсы и другие возможности в IT.\n\n"
@@ -814,9 +866,19 @@ WELCOME = ("Привет! 👋\n\nЯ IT Radar — бот, который пом�
            "🔔 Уведомления включены! Архив не рассылается.\n\n" + HELP)
 
 
+def help_for(bot, telegram_id):
+    """List commands available to this sender, including owner-only actions."""
+    if telegram_id == bot.cfg.owner_id and telegram_id > 0:
+        return HELP + "\n/check — проверить источники сейчас (только владелец)"
+    return HELP
+
+
 def handle_update(bot, upd):
     identifier = upd.get('update_id')
     if type(identifier) is not int or identifier < 0:
+        return
+    if 'callback_query' in upd:
+        handle_callback(bot,upd)
         return
     with bot._lock:
         if identifier < int(bot.db.get_flag('offset', '0')):
@@ -834,13 +896,19 @@ def handle_update(bot, upd):
             authorized = authorized and username.lower() == bot.bot_username
         active = None
         reply = None
+        markup = None
         if authorized:
+            help_text = help_for(bot, telegram_id)
             if command == '/start':
                 active = True
-                reply = WELCOME
+                reply = WELCOME + help_text[len(HELP):]
             elif command == '/stop':
                 active = False
-                reply = 'Уведомления отключены. /start — возобновить без рассылки архива.'
+                reply = 'Уведомления отключены, будущие напоминания отменены. Избранное сохранено. /start — возобновить без рассылки архива.'
+            elif command in ('/settings','/saved','/week','/reminders'):
+                reply,markup=render(bot.db,telegram_id,command[1:])
+            elif not command.startswith('/') and isinstance(text,str) and bot.db.get_flag(f'preference_input:{telegram_id}',''):
+                reply,markup=consume_input(bot,telegram_id,text)
             elif command == '/status':
                 user = bot.db.user(telegram_id)
                 counts = bot.db.user_delivery_counts(telegram_id)
@@ -848,19 +916,19 @@ def handle_update(bot, upd):
                          f"Ожидают отправки: {counts.get('pending',0)}.\n"
                          f"Отправляются: {counts.get('sending',0)}.\n"
                          f"Приостановлены из-за источников: {counts.get('suspended',0)}.\n"
-                         f"Неизвестный результат: {counts.get('uncertain',0)}.\n" + HELP)
+                         f"Неизвестный результат: {counts.get('uncertain',0)}.\n" + help_text)
             elif command == '/help':
-                reply = 'IT Radar присылает новые подходящие IT-возможности.\n' + HELP
+                reply = 'IT Radar присылает новые подходящие IT-возможности.\n' + help_text
             elif command == '/check' and telegram_id == bot.cfg.owner_id:
                 accepted, reply = bot.check_request_reply(time.time())
                 if accepted:
                     bot.db.apply_control(check_requested_at=time.time())
                     bot.scan_requested.set()
             else:
-                reply = 'Неизвестная команда.\n' + HELP
+                reply = 'Неизвестная команда.\n' + help_text
         bot.db.user_control(telegram_id if authorized else 0,
                             sender.get('username') if isinstance(sender.get('username'),str) else None,
-                            active=active, offset=identifier+1, reply=reply)
+                            active=active, offset=identifier+1, reply=reply, reply_markup=markup)
         # HTTP replies are sent by the shared scheduler; commands only persist state.
 
 
@@ -870,7 +938,7 @@ def poll_updates(bot, stop):
             bot._poll_at=time.time()
             bot._poll_retry_until=0.0
             updates=bot.notifier.call("getUpdates",{"offset":int(bot.db.get_flag("offset","0")),
-                                      "timeout":25,"allowed_updates":["message"]},timeout=35)
+                                      "timeout":25,"allowed_updates":["message","callback_query"]},timeout=35)
             if not isinstance(updates,list):
                 raise BotAPIError()
             for update in updates:
@@ -926,7 +994,7 @@ def main() -> None:
     if args.delivery_status or args.resolve_item or args.accept_telegram_gap:
         if not Path(cfg.db_path).is_file():
             raise RuntimeError("Database does not exist; set DB_PATH")
-        db=Database(cfg.db_path)
+        db=Database(cfg.db_path, metadata_timezone=cfg.rules.timezone)
         try:
             if args.accept_telegram_gap:
                 names = {channel.username.lower() for channel in cfg.channels}

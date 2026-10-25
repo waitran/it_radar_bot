@@ -108,6 +108,8 @@ def restore_backup(source, target, *, replace=False, safety_dir=None):
                 columns={row[1] for row in conn.execute('PRAGMA table_info(seen_items)')}
                 if 'delivery_state' in columns:
                     conn.execute("UPDATE seen_items SET delivery_state='legacy_review' WHERE delivery_state IN ('pending','sending')")
+                if 'reminder_jobs' in tables:
+                    conn.execute("UPDATE reminder_jobs SET status='uncertain' WHERE status IN ('pending','sending')")
                 if 'delivery_fanout' in tables:conn.execute('DELETE FROM delivery_fanout')
                 now=time.time()
                 if 'users' in tables:
