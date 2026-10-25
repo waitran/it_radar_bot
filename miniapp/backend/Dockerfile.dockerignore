@@ -1,0 +1,6 @@
+**
+!miniapp/
+!miniapp/__init__.py
+!miniapp/backend/
+!miniapp/backend/*.py
+!miniapp/backend/requirements.txt

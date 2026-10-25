@@ -1,0 +1,5 @@
+# Backend dependencies for Python 3.12; isolated from the bot dependency lock.
+fastapi==0.115.6
+pydantic==2.13.5
+uvicorn==0.34.0
+httpx==0.28.1
