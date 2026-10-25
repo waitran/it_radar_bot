@@ -11,6 +11,7 @@ FROM dependencies AS test
 COPY app ./app
 COPY config.yaml .
 COPY tests ./tests
+COPY scripts/check_repository.py ./scripts/check_repository.py
 RUN python -m tests.test_rules && python -m unittest discover -s tests -v
 
 FROM dependencies AS runtime

@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      COMPOSE_PROJECT_NAME: it-radar-ci
+      TELEGRAM_BOT_TOKEN: offline-config-check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Reject tracked secrets and application state
+        run: python3 -m scripts.check_repository
+      - name: Check Python syntax and Compose
+        run: |
+          python3 -m compileall -q app tests scripts
+          docker compose config --quiet
+      - name: Build and run rules, unittest and dependency consistency checks
+        run: docker compose build
+      - name: Repeat tests with external network disabled
+        run: |
+          docker build --target test -t it-radar-ci-tests .
+          docker run --rm --network none it-radar-ci-tests python -m tests.test_rules
+          docker run --rm --network none it-radar-ci-tests python -m unittest discover -s tests -v
+      - name: Audit locked dependency versions
+        run: |
+          docker run --rm --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            --tmpfs /tmp:rw,exec,nosuid,size=256m \
+            --mount type=bind,source="$PWD/requirements.txt",target=/work/requirements.txt,readonly \
+            it-radar-ci-it-radar-bot:latest sh -ec '
+              python -m venv /tmp/security-tool
+              /tmp/security-tool/bin/pip --isolated install --index-url https://pypi.org/simple --no-cache-dir pip-audit==2.9.0
+              /tmp/security-tool/bin/pip-audit --disable-pip --no-deps -r /work/requirements.txt
+            '
+      - name: Verify unprivileged runtime
+        run: |
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges:true \
+            it-radar-ci-it-radar-bot:latest \
+            python -c 'import os; assert os.getuid() == 10001'

@@ -15,3 +15,6 @@
 !tests/fixtures/websites/
 !tests/fixtures/websites/*.html
 !tests/fixtures/websites/*.json
+
+!scripts/
+!scripts/check_repository.py
