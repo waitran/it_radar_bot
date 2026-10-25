@@ -67,13 +67,15 @@ class Database:
         self.backup_path = None
         try:
             if path != ":memory:":
-                Path(path).parent.mkdir(parents=True, exist_ok=True)
+                Path(path).parent.mkdir(mode=0o700,parents=True,exist_ok=True)
                 self._file_lock = open(path + ".lock", "a")
+                os.fchmod(self._file_lock.fileno(),0o600)
                 try:
                     fcntl.flock(self._file_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     raise RuntimeError("Database is already in use by another bot process") from None
             self._conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
+            if path != ":memory:":os.chmod(path,0o600)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute('CREATE TEMP TABLE blocked_delivery_items(item_key TEXT PRIMARY KEY)')
             self._conn.execute("PRAGMA foreign_keys=ON")

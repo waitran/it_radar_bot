@@ -1,7 +1,39 @@
 services:
+  storage-init:
+    build: .
+    user: "0:0"
+    command: ["python", "-m", "app.storage_init"]
+    restart: "no"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 32
+    environment:
+      TARGET_UID: ${BOT_UID:-10001}
+      TARGET_GID: ${BOT_GID:-10001}
+    volumes:
+      - bot-data:/data
+      - ${BACKUP_HOST_PATH:-./backups}:/backups
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
   it-radar-bot:
     build: .
     container_name: it-radar-bot
+    user: "${BOT_UID:-10001}:${BOT_GID:-10001}"
+    depends_on:
+      storage-init:
+        condition: service_completed_successfully
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m,mode=1777
     restart: unless-stopped
     stop_grace_period: 90s
     mem_limit: ${BOT_MEMORY_LIMIT:-512m}

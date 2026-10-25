@@ -17,7 +17,10 @@ FROM dependencies AS runtime
 COPY --from=test /srv/it-radar-bot/app ./app
 COPY --from=test /srv/it-radar-bot/config.yaml .
 # SQLite lives in the mounted volume; logs go to stderr.
-RUN mkdir -p /data
+RUN mkdir -p /data /backups && chown 10001:10001 /data /backups && chmod 700 /data /backups
 ENV DB_PATH=/data/bot.db CONFIG_PATH=/srv/it-radar-bot/config.yaml
+
+ENV HOME=/tmp
+USER 10001:10001
 
 CMD ["python", "-m", "app.main"]
