@@ -83,6 +83,7 @@ class Config:
     backup_interval_seconds: int = 86400
     backup_keep: int = 7
     max_queue_age_seconds: int = 86400
+    min_free_disk_bytes: int = 1073741824
 
     def validate_runtime(self) -> None:
         """Validate startup credentials without contacting Telegram or echoing values."""
@@ -194,4 +195,5 @@ class Config:
             backup_interval_seconds=Config._env_int("BACKUP_INTERVAL_SECONDS", "86400"),
             backup_keep=Config._env_int("BACKUP_KEEP", "7",minimum=2),
             max_queue_age_seconds=Config._env_int("MAX_QUEUE_AGE_SECONDS", "86400"),
+            min_free_disk_bytes=Config._env_int("MIN_FREE_DISK_MB", "1024",minimum=0)*1024*1024,
         )

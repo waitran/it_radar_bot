@@ -4,6 +4,7 @@ import math
 import os
 from pathlib import Path
 import sys
+import shutil
 import tempfile
 import time
 
@@ -20,6 +21,15 @@ def write_health(path, state):
         os.replace(temporary,path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def free_disk(paths):
+    values=[]
+    for value in paths:
+        path=Path(value)
+        while not path.exists():path=path.parent
+        values.append(shutil.disk_usage(path).free)
+    return min(values)
 
 
 def evaluate(state, now=None):
@@ -43,6 +53,8 @@ def evaluate(state, now=None):
             return False,'all_sources_unavailable'
         if state['queue']['ready'] and now-number(state['queue']['oldest_ready_at']) > number(state['max_queue_age']):
             return False,'delivery_queue_late'
+        if state.get('disk_free_bytes') is not None and number(state['disk_free_bytes']) < number(state.get('min_free_disk_bytes',0)):
+            return False,'disk_space_low'
         if state['backup_enabled']:
             if state['backup_error']:return False,'backup_failed'
             last=number(state['last_backup_at'])

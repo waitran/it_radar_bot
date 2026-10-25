@@ -80,3 +80,9 @@ class HealthcheckTests(unittest.TestCase):
                 metrics=db.health_metrics()
                 self.assertEqual(metrics,{'ready':1,'oldest_ready_at':1000})
             finally:db.close()
+
+    def test_low_storage_is_reported_without_deleting_history(self):
+        state=self.state();state.update(disk_free_bytes=100,min_free_disk_bytes=101)
+        self.assertEqual(evaluate(state,1001),(False,'disk_space_low'))
+        state['min_free_disk_bytes']=0
+        self.assertEqual(evaluate(state,1001),(True,'ok'))

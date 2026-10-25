@@ -26,7 +26,7 @@ from app.collectors.base import collection_scope, check_collection, CollectionCa
 from app.config import Config, ConfigurationError
 from app.db import Database
 from app.backup import create_backup, BackupCancelled
-from app.healthcheck import health_path, write_health
+from app.healthcheck import health_path, write_health, free_disk
 from app.filters import Filters
 from app.models import Item
 from app.notify import TelegramNotifier, BotAPIError
@@ -734,7 +734,9 @@ class Bot:
                 scan_error=self._scan_error,queue=self.db.health_metrics(),
                 max_queue_age=self.cfg.max_queue_age_seconds,backup_enabled=bool(self.cfg.backup_dir),
                 backup_error=self.backup_error,last_backup_at=float(self.db.get_flag('last_backup_at','0')),
-                backup_interval=self.cfg.backup_interval_seconds)
+                backup_interval=self.cfg.backup_interval_seconds,
+                disk_free_bytes=free_disk([Path(self.cfg.db_path).parent]+([self.cfg.backup_dir] if self.cfg.backup_dir else [])),
+                min_free_disk_bytes=self.cfg.min_free_disk_bytes)
         write_health(health_path(self.cfg.db_path),state)
         self._health_write_at=time.monotonic()
 
