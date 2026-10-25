@@ -1,5 +1,6 @@
 """Bounded, escaped Telegram HTML. Never truncate an HTML tag or URL."""
 import html
+import re
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
@@ -33,11 +34,34 @@ def link(value, label):
         return None
 
 
+def original_url(item):
+    """Telegram source identity points at a post, including legacy stored rows."""
+    channel = re.fullmatch(r'tg_([A-Za-z0-9_]{1,64})', item.source_key)
+    if channel:
+        identifier = str(item.external_id)
+        if re.fullmatch(r'[1-9][0-9]{0,18}', identifier):
+            return f'https://t.me/{channel[1]}/{identifier}'
+        # Never replace missing post evidence with a channel homepage.
+        return None
+    return item.url
+
+
+def source_text(item, budget=180):
+    """Avoid bare channel URLs that Telegram turns into competing hyperlinks."""
+    channel = re.fullmatch(r'tg_([A-Za-z0-9_]{1,64})', item.source_key)
+    if channel:
+        name = re.sub(r'(?:https?://)?t\.me/(?:s/)?[A-Za-z0-9_]+',
+                      channel[1], item.source_name, flags=re.I)
+        label = escaped_clip(name, budget)
+        return link(original_url(item), label) or label
+    return escaped_clip(item.source_name, budget)
+
+
 def format_message(item, rules):
     labels = [rules.categories[c]['label'] for c in item.categories if c in rules.categories]
     lines = ['📡 <b>Новая возможность</b>',
              'Категория: '+escaped_clip(', '.join(labels) or '—',250),
-             'Источник: '+escaped_clip(item.source_name,180),
+             'Источник: '+source_text(item),
              '<b>'+escaped_clip(item.title,650)+'</b>']
     if item.summary:
         lines.append(escaped_clip(item.summary,1100))
@@ -47,7 +71,7 @@ def format_message(item, rules):
         tz=ZoneInfo(rules.timezone)
         date=item.deadline.astimezone(tz) if item.deadline.tzinfo else item.deadline.replace(tzinfo=tz)
         lines.append(f'Срок: {date:%Y-%m-%d %H:%M} ({rules.timezone})')
-    for value,label in [(item.url,'Оригинал'),(item.apply_url,'Заявка/регистрация')]:
+    for value,label in [(original_url(item),'Оригинал'),(item.apply_url,'Заявка/регистрация')]:
         rendered=link(value,label)
         if rendered and units('\n'.join([*lines,rendered]))<=3900:
             lines.append(rendered)

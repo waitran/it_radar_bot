@@ -9,11 +9,12 @@ import fcntl
 from pathlib import Path
 from dataclasses import asdict
 from app.models import Item
+from app.personal_db import PersonalDatabase
 from app.dedup import identities
 import threading
 from datetime import datetime, timezone
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 COMMAND_REPLY_INTERVAL = 5.0
 
 SCHEMA = """
@@ -58,8 +59,9 @@ CREATE TABLE IF NOT EXISTS flags (
 """
 
 
-class Database:
-    def __init__(self, path: str):
+class Database(PersonalDatabase):
+    def __init__(self, path: str, *, metadata_timezone="Europe/Moscow"):
+        self.metadata_timezone = metadata_timezone
         self.path = path
         self._lock = threading.Lock()
         self._file_lock = None
@@ -185,6 +187,7 @@ class Database:
                         FROM seen_items WHERE delivery_state='pending' AND eligible_at IS NOT NULL
                         ORDER BY eligible_at,item_key""")
                 self._conn.execute("INSERT OR IGNORE INTO flags VALUES('queue_dirty','1')")
+                self._migrate_personal()
                 self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
         except Exception:
             self.close()
@@ -238,7 +241,7 @@ class Database:
         with self._lock:
             return self._conn.execute("SELECT * FROM users WHERE telegram_id=?", (telegram_id,)).fetchone()
 
-    def user_control(self, telegram_id, username=None, *, active=None, offset=None, reply=None):
+    def user_control(self, telegram_id, username=None, *, active=None, offset=None, reply=None, reply_markup=None):
         """Subscription and polling offset commit before the acknowledgement HTTP call."""
         now = time.time()
         with self._lock, self._conn:
@@ -252,6 +255,7 @@ class Database:
                     is_active=excluded.is_active,updated_at=excluded.updated_at""",
                     (telegram_id,username,int(active),now,now,now))
                 if not active:
+                    self._conn.execute("UPDATE reminder_jobs SET status='cancelled' WHERE telegram_id=? AND status='pending'",(telegram_id,))
                     self._conn.execute("UPDATE user_deliveries SET status='skipped',reason='paused' WHERE telegram_id=? AND status IN ('pending','suspended')", (telegram_id,))
             if reply is not None:
                 sequence = self._conn.execute("SELECT value FROM flags WHERE name='reply_generation'").fetchone()
@@ -262,6 +266,8 @@ class Database:
                 self._conn.execute("""INSERT INTO command_replies(telegram_id,text,status,available_at,updated_at,generation) VALUES(?,?,'pending',0,?,?)
                     ON CONFLICT(telegram_id) DO UPDATE SET text=excluded.text,status='pending',
                     available_at=0,updated_at=excluded.updated_at,generation=excluded.generation""", (telegram_id,reply,now,generation))
+            if reply is not None:
+                self._conn.execute("UPDATE command_replies SET reply_markup=? WHERE telegram_id=?",(json.dumps(reply_markup) if reply_markup else None,telegram_id))
             if offset is not None:
                 self._conn.execute("INSERT INTO flags VALUES('offset',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (str(offset),))
 
@@ -273,6 +279,7 @@ class Database:
                 WHERE telegram_id=? AND is_active=1 AND subscription_version=?""",
                 (time.time(),telegram_id,version)).rowcount == 1
             if changed:
+                self._conn.execute("UPDATE reminder_jobs SET status='cancelled' WHERE telegram_id=? AND status='pending'",(telegram_id,))
                 self._conn.execute("""UPDATE user_deliveries SET status='skipped',reason='blocked'
                     WHERE telegram_id=? AND status IN ('pending','suspended')""",(telegram_id,))
             return changed
@@ -426,7 +433,7 @@ class Database:
                     cursor = user['telegram_id']
                     stats['users_examined'] += 1
                     source_users -= 1; users_left -= 1
-                    if user['eligible']:
+                    if user['eligible'] and self._personal_matches(cursor,job['item_key']):
                         inserted = self._conn.execute("""INSERT OR IGNORE INTO user_deliveries
                             (telegram_id,item_key,status) VALUES(?,?,'pending')""",(cursor,job['item_key'])).rowcount
                         slots -= inserted
@@ -634,6 +641,7 @@ class Database:
                 item.published_at.isoformat() if item.published_at else None,self._now(),
                 int(baseline),int(baseline),self.serialize(item),state))
             if inserted.rowcount:
+                self._index_item(item)
                 self._conn.execute('UPDATE seen_items SET content_hash=?,opportunity_at=?,content_updated_at=? WHERE item_key=?',
                     (content_hash or item.content_hash,item.published_at.isoformat() if item.published_at else None,self._now(),item.item_key))
             if inserted.rowcount and not baseline and category:
@@ -662,6 +670,7 @@ class Database:
                 delivery_state=?,content_updated_at=? WHERE item_key=?""", (item.title,item.summary,item.url,item.apply_url,
                 item.published_at.isoformat() if item.published_at else None,item.title_hash,
                 item.categories[0] if item.categories else None,self.serialize(item),content_hash,state,self._now(),item.item_key))
+            self._index_item(item)
             self._conn.execute('DELETE FROM item_aliases WHERE item_key=?',(item.item_key,))
             delivered = self._conn.execute("SELECT 1 FROM user_deliveries WHERE item_key=? AND status IN ('sending','sent','uncertain') LIMIT 1", (item.item_key,)).fetchone()
             if (item.categories and state != 'rejected') or delivered:
