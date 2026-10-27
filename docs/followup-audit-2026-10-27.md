@@ -207,9 +207,9 @@ follow-up коммитам. Новые тесты и production delta прохо
 production container/volumes и Telegram polling не запускались. Удалённый GitHub
 Actions run и целевой VPS этим локальным прогоном не подтверждены.
 
-## Навигация по опубликованным изменениям
+## Навигация по зафиксированным изменениям
 
-Строки относятся к **published HEAD**, а не более длинным рабочим v8-файлам:
+Строки относятся к **зафиксированному HEAD**, а не более длинным рабочим v8-файлам:
 
 - A27-04: `app/command_admission.py:19` (admit), `:34` (metrics),
   `app/db.py:245` (user_control), `:538` (health), `app/main.py:789` (health file).
@@ -234,3 +234,29 @@ Index содержит только новые изменения, не преж
 [создать PR в main](https://github.com/waitran/it_radar_bot/compare/main...codex/followup-audit-2026-10-27?expand=1).
 Фактический исход push и remote SHA сообщаются отдельно после команды; наличие
 этих ссылок само по себе не считается доказательством публикации.
+
+### Фактический результат публикации
+
+`GIT_TERMINAL_PROMPT=0 git push -u origin codex/followup-audit-2026-10-27`
+завершился exit 128:
+
+```text
+fatal: could not read Username for 'https://github.com': terminal prompts disabled
+```
+
+HTTPS Git credentials в этой сессии недоступны; GitHub CLI не установлен.
+Секреты/credential helpers/настройки защиты не менялись. Ветка на origin не
+создана; критерий публикации **не выполнен**. Наличие read-доступа к public
+репозиторию не означает write-доступ. Коммиты сохранены локально; названия
+«published/clean export» выше обозначают проверенный набор подготовленных
+коммитов, **не успешный push**. После настройки владельцем штатной GitHub
+HTTPS-авторизации выполнить из каталога it_radar_bot:
+
+```sh
+git push -u origin codex/followup-audit-2026-10-27
+git ls-remote --heads origin refs/heads/codex/followup-audit-2026-10-27 refs/heads/main
+```
+
+Ожидается remote branch SHA = локальному `git rev-parse HEAD`; main должен
+оставаться `3a9685d2c8a5aa9f8addc27de491e13af822a4eb`. Ссылки на ветку и создание
+PR станут рабочими после успешного push. Merge/production deployment не делались.

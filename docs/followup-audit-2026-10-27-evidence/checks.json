@@ -11,11 +11,6 @@
     "seconds": 9.495,
     "result": "OK"
   },
-  "clean_published_tests": {
-    "count": 440,
-    "seconds": 18.62,
-    "result": "OK"
-  },
   "docker_test_build": {
     "count": 491,
     "seconds": 98.772,
@@ -68,5 +63,18 @@
   "prior_changes": "24 tracked diff, 509 additions/73 deletions; 9 untracked paths preserved",
   "vps_acceptance": "Needs Verification",
   "real_telegram_load_test": false,
-  "production_deployment": false
+  "production_deployment": false,
+  "committed_export_tests": {
+    "count": 440,
+    "seconds": 18.62,
+    "result": "OK"
+  },
+  "push": {
+    "result": "failed",
+    "exit_code": 128,
+    "reason": "could not read Username for https://github.com: terminal prompts disabled",
+    "github_cli": "not installed",
+    "remote_branch_created": false,
+    "remote_main_sha": "3a9685d2c8a5aa9f8addc27de491e13af822a4eb"
+  }
 }
