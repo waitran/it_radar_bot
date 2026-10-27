@@ -63,6 +63,11 @@ def format_message(item, rules):
              'Категория: '+escaped_clip(', '.join(labels) or '—',250),
              'Источник: '+source_text(item),
              '<b>'+escaped_clip(item.title,650)+'</b>']
+    if len(item.categories) == 1:
+        from app.opportunity import event_type
+        detected_type = event_type(item.title + "\n" + (item.raw_text or item.summary or ""))
+        if detected_type:
+            lines.insert(2, "Тип: " + escaped_clip(detected_type, 100))
     if item.summary:
         lines.append(escaped_clip(item.summary,1100))
     status = 'набор/регистрация открыты (по тексту объявления)' if item.registration_status=='open' else 'статус регистрации неизвестен — проверьте на странице'

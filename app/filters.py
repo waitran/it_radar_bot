@@ -9,29 +9,14 @@ from zoneinfo import ZoneInfo
 from app.config import Rules
 from app.date_rules import date_evidence, _aware
 from app.models import Item
+from app.opportunity import (action_evidence, it_signals, event_type,
+                             publication_type, NEWS, RETROSPECTIVE, WEAK_IT, OTHER_ACTIVITY)
 
 log = logging.getLogger("filters")
 
-_IT = re.compile(
-    r"\b(?:python|java|postgresql)(?=\d)|\b(?:it|ict|ит|ai|ml|llm|devops|sre|soc|ctf|qa|sql|python|java|javascript|"
-    r"typescript|golang|go|rust|frontend|backend|fullstack|android|ios|linux|data|cyber|"
-    r"cloud|software|developer|programming|tech|тех|ib|иб)\b|"
-    r"информационн\w* (?:технолог|безопасност|систем)|программирован|"
-    r"разработ(?:к|чик)|кибер|цифров|машинн\w* обучен|нейросет|нейронн|"
-    r"искусственн\w* интеллект|тестирован|сетев\w* инженер|системн\w* (?:аналит|админист)|"
-    r"бизнес[ -]аналит|робототех|компьютер|\b(?:ии|цод|presale|siem)\b",
-    re.I,
-)
 _BEGINNER = re.compile(r"стажиров|стаж[её]р|\b(?:intern|internship|trainee|junior|entry[ -]level)\b|младш|начинающ|без опыта|нет опыта|опыт не требуется|\b0\s*[-–—]\s*1\b|(?:приглашаем|ждем)\s+(?:студент|выпускник)|опыт\w*.{0,20}(?:до\s*1\s*(?:года|лет)|0\s*[-–—]\s*1)", re.I)
 _SENIOR = re.compile(r"\b(?:senior|middle|lead|principal|head of)\b|ведущ\w*|руководител\w*|старш\w*", re.I)
 _RESTRICTED_AUDIENCE = re.compile(r"(?:только|исключительно)\s+для\s+(?:опытных\s+)?(?:руководител|директор|senior|middle|lead|ciso|cto)|не\s+(?:предназначен\w*|подходит)\s+для\s+(?:начинающ|студент)", re.I)
-_INVITATION = re.compile(
-    r"приглаша|присоедин|участвуй|прими участие|принять участие|приходи|запис(?:аться|ывай|ь)|"
-    r"зарегистрируй|зарегистрироваться|регистрируй|регистрация\s+(?:уже\s+)?открыта|при[её]м заявок|подать (?:заявку|резюме)|"
-    r"регистрация[^.!?\n]{0,50}по ссылке|пода(?:й|вай|ча) заяв|отклик|набор|жд[её]м|состоится|пройд[её]т|"
-    r"стартует|начн[её]тся|успей|\b(?:register|registration|apply|join us|applications open)\b",
-    re.I,
-)
 _RETROSPECTIVE = re.compile(
     r"(?:митап|хакатон|конференци\w*|встреч\w*|вебинар|соревнован\w*|лекци\w*)[^.!?\n]{0,65}?(?:уже\s+)?(?:прош[её]л|прошла|прошли|состоял|заверш)|"
     r"(?:прош[её]л|прошла|прошли|состоял\w*|завершил\w*)\s+(?:наш\w*\s+)?(?:митап|хакатон|конференц|встреч|вебинар|лекц)|"
@@ -47,15 +32,6 @@ _INFORMATIONAL = re.compile(
     r"(?:подборка|дайджест|обзор|итоги|новости|новостей)[^.!?\n]{0,45}(?:недел|рабоч|новост)|"
     r"обсудил[аи]?|рассказал[аи]?|состоял[аои]сь|"
     r"завершил(?:ся|ась|ись)[^.!?\n]{0,60}этап",
-    re.I,
-)
-_ACTION = re.compile(
-    r"приглаша(?:ем|ю)|присоединяй|участвуй|прими(?:те)? участие|принять участие|приходи|"
-    r"запис(?:аться|ывай|ь)|зарегистрируй|зарегистрироваться|регистрируй|"
-    r"регистрация[^.!?\n]{0,50}по ссылке|подать (?:заявку|резюме)|пода(?:й|вай|ча) заяв|откликни|успей|"
-    r"(?:открыт\w*|продолжается|начался)[^.!?\n]{0,25}(?:набор|при[её]м заявок|регистрац)|"
-    r"(?:регистрация|набор|при[её]м заявок)\s+(?:уже\s+)?открыт|"
-    r"\b(?:register|apply|join us|applications open)\b",
     re.I,
 )
 _EDUCATOR_AUDIENCE = re.compile(
@@ -181,21 +157,61 @@ class Filters:
             return False, "не подходит ни под одну включённую категорию"
         if _RESTRICTED_AUDIENCE.search(text):
             return False, "участие ограничено опытными специалистами"
-        context = re.sub(r"\b(?:ит|it)[ -]*(?:компани\w*|индустри\w*|отрасл\w*|company)", "", text)
-        if self.rules.require_it_context and not _IT.search(context):
-            return False, "нет явного IT-контекста"
+        if self.rules.require_it_context and not it_signals(text):
+            return False, "non_it_context"
         if (_EDUCATOR_AUDIENCE.search(text) and not re.search(
                 r"для\s+(?:студент|начинающ)|(?:преподавател\w*|учител\w*)\s+и\s+(?:студент|начинающ)", text)):
             return False, "мероприятие для преподавателей, а не начинающих IT-специалистов"
-        if _INFORMATIONAL.search(text) and not (_ACTION.search(text) or vacancy and beginner):
-            return False, "информационная публикация без приглашения к участию"
-        future = any(value >= now for value in deadlines + events)
-        if _RETROSPECTIVE.search(text) and not future:
-            return False, "отчёт о прошедшем событии или запись"
+        actions = action_evidence(text, require_it=self.rules.require_it_context)
         if _PROMOTION.search(text):
             return False, "рекламный розыгрыш или предложение покупки"
-        if not (_INVITATION.search(text) or future or vacancy and beginner):
-            return False, "нет приглашения, заявки или предстоящего события"
+        if not (actions or vacancy and beginner):
+            if _RETROSPECTIVE.search(text) or RETROSPECTIVE.search(text):
+                return False, "expired_event"
+            if _INFORMATIONAL.search(text) or NEWS.search(text):
+                return False, "informational_only"
+            if "contests" in categories and OTHER_ACTIVITY.search(text):
+                return False, "irrelevant_competition"
+            return False, "no_user_action"
         item.categories = categories
         return True, ""
 
+    def explain(self, item: Item, *, now=None) -> dict:
+        """Inspect a copy, preserving caller categories, dates and source hash."""
+        from dataclasses import replace
+        clone = replace(item, categories=list(item.categories))
+        accepted, reason = self.check(clone, now=now)
+        text = _norm(item.title + "\n" + (item.raw_text or item.summary or ""))
+        codes = {
+            "вакансия не начального уровня": "insufficient_evidence",
+            "участие ограничено опытными специалистами": "insufficient_evidence",
+            "мероприятие для преподавателей, а не начинающих IT-специалистов": "insufficient_evidence",
+            "рекламный розыгрыш или предложение покупки": "insufficient_evidence",
+            "объявление закрыто или срок подачи истёк": "closed_registration",
+            "все распознанные сроки подачи истекли": "expired_event",
+            "дата мероприятия уже прошла": "expired_event",
+            "регистрация или набор ещё не открыты": "closed_registration",
+            "не подходит ни под одну включённую категорию": "insufficient_evidence",
+            "вакансия не по IT-специальности": "non_it_context",
+        }
+        code = "accepted" if accepted else codes.get(reason, reason)
+        if reason.startswith("стоп-слово"):
+            code = "insufficient_evidence"
+        if reason.startswith("старше "):
+            code = "expired_event"
+        if (not accepted and code == "closed_registration" and clone.deadline is not None
+                and not item.explicitly_closed and not _CLOSED.search(text)
+                and not any(_keyword(word, text) for word in self.rules.closed_words)):
+            tz = ZoneInfo(self.rules.timezone)
+            if _aware(clone.deadline, tz) < _aware(now or datetime.now(timezone.utc), tz):
+                code = "expired_event"
+        categories, _ = self.match_categories(text)
+        vacancy = item.kind == "vacancy" or bool(re.search(r"ваканси|ищем|требуется", text))
+        return dict(accepted=accepted, reason=code, detail=reason,
+                    categories=clone.categories, matched_categories=categories,
+                    it_signals=it_signals(text), weak_it_signals=list(dict.fromkeys(WEAK_IT.findall(text))),
+                    user_actions=action_evidence(text, require_it=self.rules.require_it_context),
+                    publication_type=("irrelevant" if code in {"non_it_context", "irrelevant_competition"}
+                                      else publication_type(text, clone.categories, vacancy=vacancy, actionable=accepted)),
+                    event_type=event_type(text), registration_status=clone.registration_status,
+                    deadline=clone.deadline.isoformat() if clone.deadline else None)
