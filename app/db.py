@@ -10,6 +10,7 @@ from pathlib import Path
 from dataclasses import asdict
 from app.models import Item
 from app.personal_db import PersonalDatabase
+from app.command_admission import admit as admit_command_reply, metrics as command_metrics
 from app.dedup import identities
 import threading
 from datetime import datetime, timezone
@@ -257,19 +258,22 @@ class Database(PersonalDatabase):
                 if not active:
                     self._conn.execute("UPDATE reminder_jobs SET status='cancelled' WHERE telegram_id=? AND status='pending'",(telegram_id,))
                     self._conn.execute("UPDATE user_deliveries SET status='skipped',reason='paused' WHERE telegram_id=? AND status IN ('pending','suspended')", (telegram_id,))
+            reply_accepted = reply is None or admit_command_reply(self._conn, telegram_id)
+            if not reply_accepted:
+                reply = None
             if reply is not None:
                 sequence = self._conn.execute("SELECT value FROM flags WHERE name='reply_generation'").fetchone()
                 generation = int(sequence[0])+1
                 self._conn.execute("UPDATE flags SET value=? WHERE name='reply_generation'",(str(generation),))
                 # One outstanding answer per chat; a newer command replaces an older answer.
-                self._conn.execute("DELETE FROM command_replies WHERE status='pending' AND telegram_id<>? AND telegram_id IN (SELECT telegram_id FROM command_replies WHERE status='pending' ORDER BY updated_at DESC LIMIT -1 OFFSET 999)", (telegram_id,))
                 self._conn.execute("""INSERT INTO command_replies(telegram_id,text,status,available_at,updated_at,generation) VALUES(?,?,'pending',0,?,?)
                     ON CONFLICT(telegram_id) DO UPDATE SET text=excluded.text,status='pending',
-                    available_at=0,updated_at=excluded.updated_at,generation=excluded.generation""", (telegram_id,reply,now,generation))
+                    available_at=0,updated_at=CASE WHEN command_replies.status='pending' THEN command_replies.updated_at ELSE excluded.updated_at END,generation=excluded.generation""", (telegram_id,reply,now,generation))
             if reply is not None:
                 self._conn.execute("UPDATE command_replies SET reply_markup=? WHERE telegram_id=?",(json.dumps(reply_markup) if reply_markup else None,telegram_id))
             if offset is not None:
                 self._conn.execute("INSERT INTO flags VALUES('offset',?) ON CONFLICT(name) DO UPDATE SET value=excluded.value", (str(offset),))
+            return reply_accepted
 
     def deactivate_if_version(self, telegram_id, version):
         """A late 403 must not undo a newer subscription command."""
@@ -531,14 +535,17 @@ class Database(PersonalDatabase):
         with self._lock:
             return self._conn.execute("SELECT 1 FROM user_deliveries WHERE item_key=?", (item_key,)).fetchone() is not None
 
-    def health_metrics(self):
+    def health_metrics(self, *, include_commands=False):
         with self._lock:
             row=self._conn.execute("""SELECT COUNT(*) AS ready,MIN(COALESCE(s.eligible_at,
                     (julianday(s.first_seen_at)-2440587.5)*86400)) AS oldest
                 FROM user_deliveries d JOIN seen_items s ON s.item_key=d.item_key
                 WHERE d.status IN ('pending','sending')""").fetchone()
-            return dict(ready=row['ready'],oldest_ready_at=
-                        row['oldest'] if row['oldest'] is not None else None)
+            result = dict(ready=row['ready'],oldest_ready_at=
+                          row['oldest'] if row['oldest'] is not None else None)
+            if include_commands:
+                result['commands'] = command_metrics(self._conn)
+            return result
 
     def multi_delivery_counts(self, telegram_id=None):
         with self._lock:

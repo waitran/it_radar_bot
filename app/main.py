@@ -792,7 +792,7 @@ class Bot:
                 started_at=self._started_at,dispatcher_at=self._dispatcher_at,
                 poll_expected=self._poll_expected,poll_at=self._poll_at,poll_retry_until=self._poll_retry_until,
                 source_deadlines=list(self._source_deadlines.values()),scan_report=self._last_report,
-                scan_error=self._scan_error,queue=self.db.health_metrics(),
+                scan_error=self._scan_error,queue=self.db.health_metrics(include_commands=True),
                 max_queue_age=self.cfg.max_queue_age_seconds,backup_enabled=bool(self.cfg.backup_dir),
                 backup_error=self.backup_error,last_backup_at=float(self.db.get_flag('last_backup_at','0')),
                 backup_interval=self.cfg.backup_interval_seconds,
