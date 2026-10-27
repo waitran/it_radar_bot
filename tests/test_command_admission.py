@@ -61,3 +61,39 @@ class CommandAdmissionTests(unittest.TestCase):
         self.assertEqual(db.get_flag('offset'), '1200')
         self.assertEqual(db.health_metrics(include_commands=True)['commands']['rows'], 1000)
         self.assertTrue(db.user_control(1, reply='explicit new action'))
+
+
+class SaturatedSenderTests(unittest.TestCase):
+    def test_saturation_keeps_event_and_reminder_turns(self):
+        from tests.personal_support import PersonalCase
+        from datetime import datetime, timezone
+        case = PersonalCase()
+        case.setUp()
+        try:
+            entry, ref = case.event()
+            case.db.save_item(101, ref)
+            self.assertTrue(case.db.enable_reminder(101, ref, 1))
+            case.db._conn.execute('UPDATE reminder_jobs SET due_at=0')
+            case.db._conn.commit()
+            for uid in range(1, 1102):
+                case.db.user_control(uid, reply='synthetic')
+            turns = []
+            for _ in range(3):
+                case.db.set_flag('send_after', '0')
+                case.bot.dispatch_pending(now=datetime.now(timezone.utc))
+                turns.append(case.db.get_flag('last_send_kind'))
+            self.assertEqual(turns, ['command', 'event', 'reminder'])
+            self.assertEqual(case.db.health_metrics(include_commands=True)['commands']['rejected'], 101)
+            self.assertEqual(case.db.user_delivery_counts(101)['sent'], 1)
+        finally:
+            case.doCleanups()
+
+    def test_concurrent_admission_cannot_exceed_capacity(self):
+        from concurrent.futures import ThreadPoolExecutor
+        db = Database(':memory:')
+        self.addCleanup(db.close)
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            accepted = list(pool.map(lambda uid: db.user_control(uid, reply='synthetic'), range(1, 1102)))
+        self.assertEqual(sum(accepted), 1000)
+        metrics = db.health_metrics(include_commands=True)['commands']
+        self.assertEqual((metrics['rows'], metrics['accepted'], metrics['rejected']), (1000, 1000, 101))
