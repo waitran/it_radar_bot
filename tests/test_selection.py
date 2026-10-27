@@ -198,7 +198,8 @@ class SelectionTests(unittest.TestCase):
 
     def test_passed_event_without_application_deadline(self):
         self.assertFalse(self.decide('Приглашаем на митап Python', 'Митап состоится 20 октября')[0])
-        self.assertTrue(self.decide('Митап Python', 'Митап состоится 25 октября')[0])
+        self.assertFalse(self.decide('Митап Python', 'Митап состоится 25 октября')[0])
+        self.assertTrue(self.decide('Митап Python', 'Митап состоится 25 октября. Приходите!')[0])
 
     def test_past_dates_in_ctf_invitations_and_schedule_lines(self):
         cases = [
@@ -220,7 +221,10 @@ class SelectionTests(unittest.TestCase):
                      'Сроки проведения: с 20 по 23 октября',
                      'Сроки проведения: 20–23 октября']:
             with self.subTest(body=body):
-                self.assertTrue(self.decide('Митап Python', body)[0])
+                # Dates remain valid evidence, but do not prove public access.
+                self.assertTrue(self.decide('Митап Python', body + '. Вход свободный.')[0])
+                if 'Приглашаем' not in body and 'Приходите' not in body:
+                    self.assertFalse(self.decide('Митап Python', body)[0])
 
     def test_unrelated_date_on_new_line_is_not_event_evidence(self):
         self.assertTrue(self.decide('Приглашаем на митап Python',
