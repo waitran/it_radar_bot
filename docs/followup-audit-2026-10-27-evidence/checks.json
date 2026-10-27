@@ -1,0 +1,72 @@
+{
+  "date": "2026-10-27",
+  "python": "3.12.14",
+  "baseline_working_tests": {
+    "count": 482,
+    "seconds": 123.168,
+    "result": "OK"
+  },
+  "final_working_tests": {
+    "count": 491,
+    "seconds": 9.495,
+    "result": "OK"
+  },
+  "clean_published_tests": {
+    "count": 440,
+    "seconds": 18.62,
+    "result": "OK"
+  },
+  "docker_test_build": {
+    "count": 491,
+    "seconds": 98.772,
+    "result": "OK"
+  },
+  "docker_network_none": {
+    "count": 491,
+    "seconds": 10.491,
+    "result": "OK"
+  },
+  "rules": {
+    "count": 6,
+    "result": "OK"
+  },
+  "frontend": {
+    "tests": 37,
+    "files": 6,
+    "install": "OK (warnings documented)",
+    "typecheck": "OK",
+    "build": "OK",
+    "audit_vulnerabilities": 0
+  },
+  "pip_check": "No broken requirements found",
+  "pip_audit_2_9_0": "No known vulnerabilities found",
+  "pip_audit_2_10_1_bot_and_api": "No known vulnerabilities found",
+  "compose_validation": "both OK",
+  "runtime_uid": {
+    "bot": 10001,
+    "api": 10001
+  },
+  "miniapp_integration": {
+    "result": "passed",
+    "checks": [
+      "real HTTP API",
+      "HMAC",
+      "private favorites",
+      "limits",
+      "CSP",
+      "SPA routing",
+      "read-only catalog mount",
+      "WAL writer + bot lock",
+      "restart",
+      "container recreation",
+      "online backup",
+      "offline restore",
+      "running-API restore guard",
+      "unchanged catalog/offset/delivery history"
+    ]
+  },
+  "prior_changes": "24 tracked diff, 509 additions/73 deletions; 9 untracked paths preserved",
+  "vps_acceptance": "Needs Verification",
+  "real_telegram_load_test": false,
+  "production_deployment": false
+}

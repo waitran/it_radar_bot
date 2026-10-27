@@ -160,3 +160,77 @@ disk/backup/stalled dispatcher и recovery. Все проходят.
 доставку alert; local age не доказывает offsite. Реквизитов VPS нет. Реальная
 scheduled offsite, download/restore на VPS, фактические RPO/RTO и получение
 оператором unhealthy/recovery остаются обязательными действиями владельца.
+
+## Регрессия и CI — текущие результаты
+
+Python 3.12.14. Рабочее дерево (предыдущий patch + follow-up):
+**491 tests / 9.495 s / OK** с TMPDIR=/dev/shm. Исходный до изменений:
+**482 / 123.168 s / OK** на обычном /tmp; эти времена не сравнивать как ускорение.
+Отдельный clean `git archive HEAD` без прежних незакоммиченных правок:
+**440 tests / 18.620 s / OK**. Разница 51 тест — именно непубликованный предыдущий
+этап, не отключение тестов. Smoke benchmark clean export: 8 сценариев N=100,
+ordinary model=203 s из-за legacy wait; полный рабочий benchmark описан выше.
+
+Проверены defaults/partial topics, menu/edit/favorites/reminders/callback repeat,
+ID isolation, concurrent HTTP generation, stop/resubscribe, migrations/restart,
+backup/restore, archive protection, обычные уведомления и network failures в полном
+текущем наборе. Предыдущие UX-тесты доступны только в рабочем дереве, не присвоены
+follow-up коммитам. Новые тесты и production delta проходят и на clean HEAD.
+
+| Команда / среда | Результат |
+|---|---|
+| `TMPDIR=/dev/shm .venv/bin/python -m unittest discover -s tests -v` | 491 OK |
+| `.venv/bin/python -m tests.test_rules` | 6/6 OK |
+| `.venv/bin/python -m scripts.check_repository` | Passed; отдельно проверены все опубликованные blobs и evidence |
+| `.venv/bin/python -m compileall -q app tests scripts miniapp/backend` | exit 0 |
+| `.venv/bin/python -m pip check` | No broken requirements found |
+| `git diff --check`, `git diff --cached --check` | exit 0 |
+| `TELEGRAM_BOT_TOKEN=offline-config-check docker compose config --quiet` | exit 0 |
+| `TELEGRAM_BOT_TOKEN=offline-config-check MINIAPP_DOMAIN=miniapp.example.invalid BOT_DATA_VOLUME=ci-validation-only docker compose -f compose.miniapp.yml config --quiet` | exit 0 |
+| `TELEGRAM_BOT_TOKEN=offline-config-check docker compose build` | Built; 489 tests OK (до двух последних saturation tests) |
+| `docker build --target test -t it-radar-followup-tests .` | Built; финальные 491 / 98.772 s / OK |
+| `docker run --rm --network none --tmpfs /tmp:rw,exec,nosuid,size=2g it-radar-followup-tests python -m tests.test_rules` | 6/6 OK |
+| `docker run --rm --network none --tmpfs /tmp:rw,exec,nosuid,size=2g it-radar-followup-tests python -m unittest discover -s tests -v` | 491 / 10.491 s / OK |
+| `docker run --rm --network none it_radar_bot-it-radar-bot:latest python -m pip check` | No broken requirements found |
+| pip-audit 2.10.1 `--disable-pip --no-deps -r requirements.txt -r miniapp/backend/requirements.txt` | No known vulnerabilities found |
+| CI pip-audit 2.9.0 в read-only runtime с cap-drop/no-new-privileges, requirements bind readonly, /tmp tmpfs 256m | No known vulnerabilities found |
+| `npm ci && npm run typecheck && npm test && npm run build && npm audit --audit-level=moderate` в miniapp/frontend | 37 tests / 6 files passed; build OK; 0 vulnerabilities |
+| `TELEGRAM_BOT_TOKEN=offline-config-check MINIAPP_DOMAIN=miniapp.example.invalid BOT_DATA_VOLUME=ci-build-only docker compose -f compose.miniapp.yml build api web` | оба Built |
+| `docker run --rm --network none -e MINIAPP_DOMAIN=miniapp.example.invalid --entrypoint caddy it-radar-miniapp-web:local validate --config /etc/caddy/Caddyfile --adapter caddyfile` | Valid configuration |
+| bot/API runtime без сети, read-only, cap-drop ALL, no-new-privileges; `assert os.getuid() == 10001` | оба UID 10001 |
+| `TMPDIR=/dev/shm .venv/bin/python scripts/test_miniapp_containers.py` | passed: HTTP/HMAC/favorites/limits/CSP/SPA/readonly/WAL/restart/recreation/online backup/offline restore/active API guard/history |
+
+`npm ci` выдал предупреждения reify lockfile и deprecated whatwg-encoding,
+но завершился успешно; package-lock не изменён. Caddy предупреждает о форматировании
+и HTTPS в конфигурационной проверке без сети; validation успешна. Защиты не отключены.
+Временные объёмы и synthetic credentials интеграционного скрипта изолированы,
+production container/volumes и Telegram polling не запускались. Удалённый GitHub
+Actions run и целевой VPS этим локальным прогоном не подтверждены.
+
+## Навигация по опубликованным изменениям
+
+Строки относятся к **published HEAD**, а не более длинным рабочим v8-файлам:
+
+- A27-04: `app/command_admission.py:19` (admit), `:34` (metrics),
+  `app/db.py:245` (user_control), `:538` (health), `app/main.py:789` (health file).
+- Регрессии: `tests/test_command_admission.py:10`, `:66`.
+- OPS-01: `app/ops_verify.py:24` (age), `:75` (drill pair), `:96` (transitions),
+  `tests/test_ops_verify.py:18`, `docs/followup-operations-runbook.md`.
+- A27-05: `scripts/benchmark_delivery_capacity.py:55`; evidence capacity-before/
+  capacity-after JSON. Source hashes и безопасные итоги — manifest/checks JSON.
+
+## Публикация и сохранность предыдущего этапа
+
+Ветки main/master не переключались и не изменялись; origin/main исходно
+`3a9685d2c8a5aa9f8addc27de491e13af822a4eb`. Никаких reset/clean/force/merge/deploy.
+После staged-only коммитов оставшиеся 24 tracked diff имеют ровно исходную
+статистику: 509 additions / 73 deletions; исходные 9 untracked paths сохранены.
+Побайтово проверено сохранение прежних db.py/main.py после вычитания follow-up.
+Index содержит только новые изменения, не прежние v8/UX/restore fixes.
+
+Новые коммиты создаются в `codex/followup-audit-2026-10-27` и публикуются обычным
+`git push -u origin codex/followup-audit-2026-10-27`. Ссылки:
+[ветка](https://github.com/waitran/it_radar_bot/tree/codex/followup-audit-2026-10-27),
+[создать PR в main](https://github.com/waitran/it_radar_bot/compare/main...codex/followup-audit-2026-10-27?expand=1).
+Фактический исход push и remote SHA сообщаются отдельно после команды; наличие
+этих ссылок само по себе не считается доказательством публикации.

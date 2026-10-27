@@ -1,0 +1,17 @@
+# Baseline sources were saved BEFORE changes; retained outside Git to avoid
+# committing the previous stage. Requires the original local baseline copies.
+TMPDIR=/dev/shm .venv/bin/python - <<'PY'
+import importlib.util
+import scripts.benchmark_delivery_capacity as bench
+
+def load(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+base_db = load('app.baseline_db', '/tmp/it-radar-followup-baseline/db.py')
+base_main = load('app.baseline_main', '/tmp/it-radar-followup-baseline/main.py')
+base_main.Database = base_db.Database
+bench.Bot = base_main.Bot
+bench.main()
+PY

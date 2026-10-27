@@ -1,0 +1,30 @@
+{
+  "base_commit": "a022e873d6fa6163c57df36b9a9b91532b6258a4",
+  "baseline_source_sha256": {
+    "db.py": "f338ca2bab946bbb44a0dcdfe07171425d6ff5d5957eb2bf7af49ad5a6d3ddbc",
+    "main.py": "d5d8ab6fa9d7bc8bf661bc0212a2ae20f1e5ffb81bd18ac23e6a4b84689eb2e8"
+  },
+  "working_source_sha256": {
+    "app/command_admission.py": "1e64be5c6e9cd951b0f144589acfa5abac99c9ad4d66280644dde47134c63ea1",
+    "app/db.py": "47e0ea0d8c4341799d80c33179959702aa76521328256bdb26eacc57f166b716",
+    "app/main.py": "23d0c27361b0c351d8f870176b8956696c5002c23c0445aa864b5b9370090831",
+    "app/ops_verify.py": "50df66e21e12d1d6f3edb9584527b68c8fa47785f6bb7c949785e93af8271e64",
+    "scripts/benchmark_delivery_capacity.py": "dbf06323aed98eb61596d0956b37757cb2fc2363d283f5e0eda25010a46f55e9",
+    "tests/test_command_admission.py": "7541e7368553ad3dfa77382ef4c1065117e52c520cbb80be57e588ca68015ae9",
+    "tests/test_ops_verify.py": "02c3d796cf13d92bb631f3c3c2148340bfdd8b8865589ed6174774ccc8a7e4fa"
+  },
+  "published_source_sha256": {
+    "app/command_admission.py": "1e64be5c6e9cd951b0f144589acfa5abac99c9ad4d66280644dde47134c63ea1",
+    "app/db.py": "5b14780e6569affa43acbc216016310b8955ce9296777815087c4a9099b9a6d0",
+    "app/main.py": "456ed740b36488db2c39491b15e2e8375ba2dc4776e791551d0b9b352f47dfe9",
+    "app/ops_verify.py": "50df66e21e12d1d6f3edb9584527b68c8fa47785f6bb7c949785e93af8271e64",
+    "scripts/benchmark_delivery_capacity.py": "dbf06323aed98eb61596d0956b37757cb2fc2363d283f5e0eda25010a46f55e9",
+    "tests/test_command_admission.py": "7541e7368553ad3dfa77382ef4c1065117e52c520cbb80be57e588ca68015ae9",
+    "tests/test_ops_verify.py": "02c3d796cf13d92bb631f3c3c2148340bfdd8b8865589ed6174774ccc8a7e4fa"
+  },
+  "evidence_sha256": {
+    "capacity-before.json": "471e2447a0f5cd33679a71318870a80b37b559140c41e92282bf00ca63814c1c",
+    "benchmark-before-command.txt": "ec164d63db1313b5e53de6ac686c0fc36b28be6b8feda62fa951b242f99d42e6",
+    "capacity-after.json": "35c5d9eeb9606b46cd3decdba86a3f1963d8952319b29ba0888b9f4cf7f78aec"
+  }
+}
