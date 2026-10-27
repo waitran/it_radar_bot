@@ -1,0 +1,629 @@
+{
+  "clock": "2026-10-27T12:00:00+03:00",
+  "baseline_head": "d4b35c5c0931575ab05ad25fd06cc30e58468df1",
+  "corpus": "tests/fixtures/filtering/publications.json",
+  "corpus_sha256": "33b7b2426d83582897021f4e7667fb495a06374e402d12593487e9c36236a78a",
+  "scope": "50 constructed regression publications, not production accuracy",
+  "before": {
+    "TP": 20,
+    "FP": 17,
+    "TN": 8,
+    "FN": 5,
+    "precision": 0.5405405405405406,
+    "recall": 0.8,
+    "f1": 0.6451612903225806,
+    "decisions": [
+      {
+        "id": "python_hackathon",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "ctf",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "devops",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "cybersecurity",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "backend_intern",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "devsecops_job",
+        "expected": true,
+        "accepted": false,
+        "reason": "нет явного IT-контекста"
+      },
+      {
+        "id": "kubernetes",
+        "expected": true,
+        "accepted": false,
+        "reason": "не подходит ни под одну включённую категорию"
+      },
+      {
+        "id": "docker",
+        "expected": true,
+        "accepted": false,
+        "reason": "нет явного IT-контекста"
+      },
+      {
+        "id": "olympiad",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "robot_viewers",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "webinar",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "linux",
+        "expected": true,
+        "accepted": false,
+        "reason": "не подходит ни под одну включённую категорию"
+      },
+      {
+        "id": "career",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "go",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "data",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "cloud",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "ib",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "ai",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "technical",
+        "expected": true,
+        "accepted": false,
+        "reason": "нет явного IT-контекста"
+      },
+      {
+        "id": "information_tech",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "software",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "frontend",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "sre",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "rust",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "it_meetup",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "donation",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "charity",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "sport",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "creative",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "photo",
+        "expected": false,
+        "accepted": false,
+        "reason": "нет явного IT-контекста"
+      },
+      {
+        "id": "victory",
+        "expected": false,
+        "accepted": false,
+        "reason": "информационная публикация без приглашения к участию"
+      },
+      {
+        "id": "robot_news",
+        "expected": false,
+        "accepted": false,
+        "reason": "нет явного IT-контекста"
+      },
+      {
+        "id": "recap",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "conference_news",
+        "expected": false,
+        "accepted": false,
+        "reason": "нет явного IT-контекста"
+      },
+      {
+        "id": "company_news",
+        "expected": false,
+        "accepted": false,
+        "reason": "информационная публикация без приглашения к участию"
+      },
+      {
+        "id": "university",
+        "expected": false,
+        "accepted": false,
+        "reason": "информационная публикация без приглашения к участию"
+      },
+      {
+        "id": "essay",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "it_pronoun",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "go_game",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "tech_brand",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "data_brand",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "cloud_poetry",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "weak_digital",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "weak_it",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "weak_ib",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "weak_ai",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "unrelated_registration",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "closed",
+        "expected": false,
+        "accepted": false,
+        "reason": "объявление закрыто или срок подачи истёк"
+      },
+      {
+        "id": "expired",
+        "expected": false,
+        "accepted": false,
+        "reason": "дата мероприятия уже прошла"
+      },
+      {
+        "id": "third_party",
+        "expected": false,
+        "accepted": true,
+        "reason": ""
+      }
+    ]
+  },
+  "after": {
+    "TP": 25,
+    "FP": 0,
+    "TN": 25,
+    "FN": 0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "decisions": [
+      {
+        "id": "python_hackathon",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "ctf",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "devops",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "cybersecurity",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "backend_intern",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "devsecops_job",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "kubernetes",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "docker",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "olympiad",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "robot_viewers",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "webinar",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "linux",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "career",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "go",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "data",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "cloud",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "ib",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "ai",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "technical",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "information_tech",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "software",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "frontend",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "sre",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "rust",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "it_meetup",
+        "expected": true,
+        "accepted": true,
+        "reason": ""
+      },
+      {
+        "id": "donation",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "charity",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "sport",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "creative",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "photo",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "victory",
+        "expected": false,
+        "accepted": false,
+        "reason": "informational_only"
+      },
+      {
+        "id": "robot_news",
+        "expected": false,
+        "accepted": false,
+        "reason": "informational_only"
+      },
+      {
+        "id": "recap",
+        "expected": false,
+        "accepted": false,
+        "reason": "expired_event"
+      },
+      {
+        "id": "conference_news",
+        "expected": false,
+        "accepted": false,
+        "reason": "informational_only"
+      },
+      {
+        "id": "company_news",
+        "expected": false,
+        "accepted": false,
+        "reason": "informational_only"
+      },
+      {
+        "id": "university",
+        "expected": false,
+        "accepted": false,
+        "reason": "informational_only"
+      },
+      {
+        "id": "essay",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "it_pronoun",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "go_game",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "tech_brand",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "data_brand",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "cloud_poetry",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "weak_digital",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "weak_it",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "weak_ib",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "weak_ai",
+        "expected": false,
+        "accepted": false,
+        "reason": "non_it_context"
+      },
+      {
+        "id": "unrelated_registration",
+        "expected": false,
+        "accepted": false,
+        "reason": "informational_only"
+      },
+      {
+        "id": "closed",
+        "expected": false,
+        "accepted": false,
+        "reason": "объявление закрыто или срок подачи истёк"
+      },
+      {
+        "id": "expired",
+        "expected": false,
+        "accepted": false,
+        "reason": "дата мероприятия уже прошла"
+      },
+      {
+        "id": "third_party",
+        "expected": false,
+        "accepted": false,
+        "reason": "informational_only"
+      }
+    ]
+  }
+}
